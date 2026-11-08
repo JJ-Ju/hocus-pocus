@@ -399,7 +399,7 @@ Key numbers per frame:
 
 ## Micro non-uniformity (damage-proto)
 
-| panel | mode | status | p90/p10 | CV | kurtosis | note |
+| panel | mode | result | p90/p10 | CV | kurtosis | note |
 |---|---|---|---|---|---|---|
 | left_before | variance_map | fail | 1.1 | 0.069 | - | render mode on the map: na: surface has no measurable grain (mean local std 0.12 L*, below 8-bit/JPEG quantisation) |
 | right_after | variance_map | pass | 3.86 | 0.547 | - | render mode on the map: na: surface has no measurable grain (mean local std 0.20 L*, below 8-bit/JPEG quantisation) |

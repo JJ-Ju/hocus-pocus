@@ -745,7 +745,7 @@ These are driven by new evidence and the art director's direction, not by a buil
 
 ## 7. Not found, and what to search next
 
-| Gap | Status | Next step |
+| Gap | Why unchecked | Next step |
 |---|---|---|
 | Crack length and type shares on real danchi, by age | No survey found. The Otaru grading and a high-rise survey were the closest. | J-STAGE / AIJ 梗概: 公営住宅 外壁 ひび割れ 長さ 分布; or measure from photos of real danchi (a gate-calibration task, as Glondu et al. did [S/2 44]) |
 | Spall sizes at balcony slab noses; exposed bar length per spot | Not found | Repair records: 爆裂 補修 箇所 寸法 バルコニー 先端 |

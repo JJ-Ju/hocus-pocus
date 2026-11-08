@@ -1,9 +1,30 @@
 """rules_to_md.py - render weather_rules.json as the skill's reference page (weathering-rules.md).
 python -I rules_to_md.py <weather_rules.json> <out.md>"""
 import json
+import os
 import sys
 
 R = json.load(open(sys.argv[1], encoding="utf-8"))
+
+
+def _check_paths(R, start):
+    """Round J (audit rank 28): every cited docs/... path must exist in the repo. Skipped when the
+    rulebook is not inside a repo (no docs/redesign/research above it)."""
+    import re
+    d = os.path.dirname(os.path.abspath(start))
+    for _ in range(6):
+        if os.path.isdir(os.path.join(d, "docs", "redesign", "research")):
+            break
+        d = os.path.dirname(d)
+    else:
+        return
+    txt = json.dumps(R, ensure_ascii=False)
+    missing = sorted({m for m in re.findall(r"docs/[A-Za-z0-9_./-]+\.md", txt) if not os.path.exists(os.path.join(d, m))})
+    if missing:
+        raise SystemExit("rules cite paths that do not exist: %s" % ", ".join(missing))
+
+
+_check_paths(R, sys.argv[1])
 D = R["definitions"]
 L = []
 w = L.append

@@ -274,7 +274,9 @@ Treat `weather_atlas.png`, `macro_var.png` and `spray_ao.png` as linear data (no
     → Lerp(0.94, 1.06) = macro.
   - Base Color = `VertexColor.RGB × cavity × macro`.
   - Normal = `spray_normal` at `TexCoord[0] × 0.5` (normal map), FlattenNormal to 0.6 (soffit 0.4).
-  - Roughness 0.86, Specular 0.4.
+    Tick **Flip Green Channel** on `spray_normal` and `concrete_normal`: Copernicus writes OpenGL
+    normals (Y+) and Unreal reads DirectX (Y−), so without it ledges and grooves light from below.
+  - Roughness 0.86, Specular 0.5 (the dielectric default in both engines: F0 0.04).
 - **Decal (`M_DanchiDecal`, slot `decal`).** Best as a mesh decal: Material Domain *Deferred
   Decal*, Decal Blend Mode *Translucent* (DBuffer: Color, Roughness). Base Color =
   `VertexColor.RGB`, Opacity = `weather_atlas(TexCoord[0]).R × VertexColor.A`, Roughness 0.9. The
@@ -303,7 +305,7 @@ void fragment() {
     NORMAL_MAP = texture(spray_normal, UV * 0.5).rgb;
     NORMAL_MAP_DEPTH = normal_depth;
     ROUGHNESS = 0.86;
-    SPECULAR = 0.4;
+    SPECULAR = 0.5;   // F0 0.04, as in Unreal
 }
 ```
 

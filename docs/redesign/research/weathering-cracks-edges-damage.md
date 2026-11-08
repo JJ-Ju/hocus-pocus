@@ -997,7 +997,7 @@ All of these checks are [I], unless a source is marked.
 
 ## 9. Not found, and what to search next
 
-| Gap | Status | Next step |
+| Gap | Why unchecked | Next step |
 |---|---|---|
 | UR (都市再生機構) 保全工事共通仕様書 | Site returned 403 | Try a cached copy, or ask the user |
 | Danchi crack density (m/m²) by age | No survey found; §2.4 is anchored estimate | Search J-STAGE / AIJ 梗概 for 公団住宅 or 公営住宅 外壁 ひび割れ 密度 調査 |

@@ -3,8 +3,9 @@ material reads, beside the shared tiling sets, so the look ships as masks + tili
 instead of one low-res sheet.
 
 Per plane, from the build's layer stack (steps_<plane>.npz) and planes (<plane>.npz):
-  <plane>_M_hi.png   RGBA8 linear, 50 px/m: R streaks (run-off envelope), G stains + ground band
-                     (on steel: rust), B growth cover, A light layers (efflorescence)
+  <plane>_M_hi.png   RGBA8 linear, 50 px/m: R streaks (run-off envelope; on steel: bare steel where the
+                     paint flaked, which the material shades as metal), G stains + ground band (on steel:
+                     rust and its runs down the bars), B growth cover, A light layers (efflorescence)
   <plane>_M_lo.png   RGBA8 linear, 25 px/m: R soiling film, G damp (where water stays), B coat tone
                      (0.5 = none: fading, repaint), A edge-wear amount (for the trims)
   <plane>_tint.png   RGB8 sRGB, 25 px/m: the dirt colour (film and marks)
@@ -94,6 +95,30 @@ def steps_of(d, plane):
     return out
 
 
+def pot_pad(a):
+    """Round J (research texture-and-material-standards.md §2): block compression needs sides that are
+    multiples of 4 and Unreal streams only powers of two, so a mask is padded by edge extension up to the
+    next power of two on each side. The frame in export.json keeps the facade's own size."""
+    h, w = a.shape[:2]
+    H = 1 << int(np.ceil(np.log2(max(h, 4))))
+    W = 1 << int(np.ceil(np.log2(max(w, 4))))
+    pad = [(0, H - h), (0, W - w)] + [(0, 0)] * (a.ndim - 2)
+    return np.pad(a, pad, mode="edge")
+
+
+MAX_SIDE = 4096     # J13 (audit rank 24): Godot Mobile and Compatibility, and many GPUs' streaming pools
+
+
+def size_lint(path):
+    """A texture's sides: multiples of 4 (block compression), powers of two (streamed), at most 4,096 px."""
+    w, h = Image.open(path).size
+    ok4 = w % 4 == 0 and h % 4 == 0
+    pot = (w & (w - 1)) == 0 and (h & (h - 1)) == 0
+    small = max(w, h) <= MAX_SIDE
+    return {"file": os.path.basename(path), "size": [w, h], "mult4": ok4, "pot": pot, "max_side": small,
+            "ok": bool(ok4 and pot and small)}
+
+
 def mb_with_mips(w, h, bytes_px):
     return w * h * bytes_px * 4.0 / 3.0 / 2 ** 20
 
@@ -110,18 +135,19 @@ def export(d, out):
         def al(k):
             return st[k]["alpha"].astype(np.float32) if k in st else np.zeros((H, W), np.float32)
         steel = z["steel"] > 0 if "steel" in z.files else np.zeros((H, W), bool)
-        hi = np.dstack([al("streaks"), np.where(steel, al("rust"), np.maximum(al("stains"), al("base"))), al("bio"),
-                        al("efflorescence")])
+        hi = np.dstack([np.where(steel, al("rust_bare"), al("streaks")),       # round J: bare steel in R on the steel
+                        np.where(steel, np.maximum(al("rust"), al("rust_run")), np.maximum(al("stains"), al("base"))),
+                        al("bio"), al("efflorescence")])
         damp = z["bio_w"].astype(np.float32) if "bio_w" in z.files else np.zeros((H, W), np.float32)
         tone = 0.5 - 0.5 * al("fading") * 0.18
         if "repaint" in st:
             tone = tone + 0.5 * st["repaint"]["alpha"].astype(np.float32) * float(np.asarray(st["repaint"].get("shift", 0)))
         lo = np.dstack([_half(al("soiling")), _half(damp), _half(tone), _half(al("wear"))])
-        Image.fromarray(_u8(hi), "RGBA").save(os.path.join(out, name + "_M_hi.png"))
-        Image.fromarray(_u8(lo), "RGBA").save(os.path.join(out, name + "_M_lo.png"))
+        Image.fromarray(_u8(pot_pad(hi)), "RGBA").save(os.path.join(out, name + "_M_hi.png"))   # round J: POT, edge-padded
+        Image.fromarray(_u8(pot_pad(lo)), "RGBA").save(os.path.join(out, name + "_M_lo.png"))
         col = st.get("soiling", {}).get("colour")
         if col is not None and np.ndim(col) == 3:
-            Image.fromarray(_srgb8(col.astype(np.float32))).save(os.path.join(out, name + "_tint.png"))
+            Image.fromarray(_srgb8(pot_pad(col.astype(np.float32)))).save(os.path.join(out, name + "_tint.png"))
         bcol = st.get("bio", {}).get("colour")
         if bcol is not None and np.ndim(bcol) == 3:
             xs = np.array([k for k, _ in wf.BIO_RAMP])
@@ -131,19 +157,24 @@ def export(d, out):
             c = bcol.astype(np.float32).reshape(-1, 3)
             d2 = ((c[:, None, :] - ramp[None, ::4, :]) ** 2).sum(-1)
             stg = (np.argmin(d2, axis=1) * 4 / 255.0).reshape(bcol.shape[:2])
-            Image.fromarray(_u8(stg)).save(os.path.join(out, name + "_stage.png"))
+            Image.fromarray(_u8(pot_pad(stg))).save(os.path.join(out, name + "_stage.png"))
             Image.fromarray(_srgb8(ramp[None, :, :].astype(np.float32))).save(os.path.join(out, "growth_ramp.png"))
         decals = decal_list(z, pm)
         json.dump({"plane": name, "units": "facade metres, origin top-left, y down", "decals": decals},
                   open(os.path.join(out, name + "_decals.json"), "w"), indent=0)
         info.setdefault("decals", {})[name] = {"n": len(decals), "per_m2": round(len(decals) / max(1e-6, float(np.isin(z["cls"], (1, 2)).sum()) / pm["ppm"] ** 2), 3)}
         ppm = pm["ppm"]
-        mb = mb_with_mips(W, H, 1.0) + mb_with_mips(W // 2, H // 2, 1.0) + 2 * mb_with_mips(W // 2, H // 2, 0.5)
+        Wp, Hp = 1 << int(np.ceil(np.log2(W))), 1 << int(np.ceil(np.log2(H)))      # the padded sizes ship
+        mb = mb_with_mips(Wp, Hp, 1.0) + mb_with_mips(Wp // 2, Hp // 2, 1.0) + 2 * mb_with_mips(Wp // 2, Hp // 2, 0.5)
         info["planes"][name] = {"size_m": [W / ppm, H / ppm], "M_hi_ppm": ppm, "M_lo_ppm": ppm / 2, "mb_bc": round(mb, 1),
-                                "orient": pm.get("orient")}
+                                "orient": pm.get("orient"), "M_hi_px": [W, H], "padded": "edge, to the next power of two (UV = metres x ppm / padded size)"}
+        info.setdefault("lint", []).extend(size_lint(os.path.join(out, name + s_)) for s_ in ("_M_hi.png", "_M_lo.png"))
         info["mb"] += mb
     info["mb"] = round(info["mb"], 1)
     json.dump(info, open(os.path.join(out, "export.json"), "w"), indent=1)
+    bad = [x for x in info.get("lint", []) if not x["ok"]]
+    if bad:                                   # J13: the export fails, not just records (split the plane or use 25 px/m)
+        raise ValueError("texture size lint failed: %s" % ", ".join("%s %dx%d" % (x["file"], *x["size"]) for x in bad))
     return info
 
 

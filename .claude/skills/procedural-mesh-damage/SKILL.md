@@ -21,6 +21,13 @@ result depends on transport, history or interaction (run-off that carries dirt d
 feeds on itself, trails that bundle), [references/wear-simulation.md](references/wear-simulation.md)
 says when a simulation beats the rules and how to run one. Its recipes are not yet tested.
 
+**Not yet in this skill: structural damage on facades.** Storey-long shrinkage-crack chains,
+cracks along corroding bars with their spalls and exposed bars, one crack graph shared by the
+texture and the mesh, and derelict chunks (`docs/redesign/research/weathering-structural-damage.md`,
+rules K12–K21) are parked until a damage round, or a review that asks for cracks, spalls or broken
+pieces (the research index, `docs/redesign/research/README.md`, keeps the trigger). Until then, cracks on
+walls come from the facade weathering layers, not from this skill's mesh tools.
+
 ## Principles
 
 1. **Damage follows cause.** Chips concentrate on convex edges and corners, more near the
@@ -193,8 +200,11 @@ step ends with a check.
 
       Each source's length is k·√(catchment). Set `drip` 1 where the edge has a drip groove.
     - **`streak_mask.vfl`** draws them down each face as `f@streak`. A streak is full
-      strength at the source and fans out at the source's angle, fading as exp(−3t) and
-      meandering further down. Top edges with no drip also get a dark band 5–15 cm deep.
+      strength at the source and fans out at the source's angle (10–20° at edge ends, a few
+      degrees for the fine fringe, as photographed), fading as exp(−3t) and meandering further
+      down. Rust runs differ: they keep their width or narrow (a head 1.6–2.6× the tail's width
+      over the top quarter, the tail in fingers 1–2 cm wide), so give rust sources `fan` 0 and
+      taper them. Top edges with no drip also get a dark band 5–15 cm deep.
       Remap the mask with smoothstep(0, 0.5) before darkening, or it reads too faint.
     - **`micro_fields.vfl`** writes three primvars for the shader or Copernicus:
       - `micro_env`, the grain amplitude: floor + cluster²;
@@ -204,7 +214,8 @@ step ends with a check.
 
       Multiply the micro noise by them. *Check:* an unlit, straight-on render of the micro
       layer, measured in 20 cm windows: a coefficient of variation of window variance of
-      0.6 or more, a 90th/10th percentile spread of local std of 3–6, kurtosis 5–20. The test
+      0.6 or more, a 90th/10th percentile spread of local std of 3 or more (photographed walls
+      run 3–30, median 12.5), kurtosis 5–20. The test
       went from 0.03 to 1.1, from 1.2 to 3.5, and from 2.8 to 7.6.
 
     Fields on the low-poly game mesh smear; for an engine, rasterise them to UV (step 11).

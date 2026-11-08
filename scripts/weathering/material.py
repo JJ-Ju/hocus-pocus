@@ -56,6 +56,29 @@ def coat_cloud(shape, ppm, key, n_repaint=0):
 # calibrated so each J1 band (10-50 cm, 0.5-2 m) of the factor reads CLOUD_NEW on a new coat
 CLOUD_GAIN = 2.26
 
+# round J: the coat's colour drifts as well as its value (user, round I: 'more variety in saturation';
+# research surface-detail-techniques.md 7: the clean coat varied only in value). A chroma field scales the
+# paint's distance from grey, a warm/cool field tilts red against blue, both at the clouds' scales (10 cm-2 m).
+TINT_ON = True
+TINT_S = 0.22               # chroma: x (1 + TINT_S x s), s unit std (about 0.45 C* std on the cream paint)
+TINT_W = 0.004              # warm/cool: R x (1 + TINT_W x w), B x (1 - TINT_W x w)
+
+
+def coat_tint(base, paint, ppm, key):
+    """The paint's colour with its chroma and warm/cool drift (linear RGB, luminance kept)."""
+    sh = paint.shape
+
+    def fld(tag):
+        f = nz.fbm(sh, ppm, [5, 6, 7], key + ("tint", tag)) + 0.7 * nz.gfield(sh, 0.10 / 3.0 * ppm, key + ("tint", tag, "f"))
+        return (f / max(float(f.std()), 1e-9)).astype(F32)
+    s, w = fld("s"), fld("w")
+    lum = np.array([0.2126, 0.7152, 0.0722], F32)
+    Y = (base @ lum)[..., None]
+    b2 = Y + (base - Y) * (1.0 + TINT_S * s)[..., None]
+    b2 = b2 * (1.0 + TINT_W * w[..., None] * np.array([1.0, 0.0, -1.0], F32))
+    b2 = b2 * (Y / np.maximum((b2 @ lum)[..., None], 1e-6))          # keep the luminance (J1 measures it)
+    return np.where(paint[..., None], b2, base).astype(F32)
+
 
 def flat_walls(plane):
     """Painted pixels that belong to large solid flat elements (gables, core walls): a box of at

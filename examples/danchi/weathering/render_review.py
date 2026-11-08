@@ -31,6 +31,8 @@ SHOTS = {
     "W_gable/top": ("W_gable", (0, 330, 744, 1000), 200),
     "N_front/mid": ("N_front", (1500, 700, 2400, 1200), 200),
     "N_front/foot": ("N_front", (1500, 1500, 2400, 1800), 200),
+    "S_front/peel": ("S_front", (1700, 1696, 1800, 1786), 1000),       # round J: the P3 window, 1 mm/px
+    "S_front/topcorner": ("S_front", (26, 300, 626, 600), 200),       # round J: the top-left corner (F5)
 }
 
 

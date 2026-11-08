@@ -54,10 +54,13 @@ uniform float w_run = 0.55;
 uniform float w_growth = 0.30;
 uniform float w_light = 0.30;
 uniform float run_band_m = 0.35;
-uniform vec3 k_film : source_color = vec3(0.094, 0.076, 0.052);
-uniform vec3 k_stain : source_color = vec3(0.084, 0.069, 0.050);
-uniform vec3 k_run : source_color = vec3(0.074, 0.060, 0.042);
-uniform vec3 k_light : source_color = vec3(0.78, 0.78, 0.75);
+// The mark colours are LINEAR values (weather_fields.COL), so they carry no source_color hint: Godot
+// converts source_color uniforms from sRGB, which made them about 10x too dark (0.094 -> 0.009).
+// wall_colour above is sRGB-encoded and keeps its hint.
+uniform vec3 k_film = vec3(0.094, 0.076, 0.052);   // linear
+uniform vec3 k_stain = vec3(0.084, 0.069, 0.050);  // linear
+uniform vec3 k_run = vec3(0.074, 0.060, 0.042);    // linear
+uniform vec3 k_light = vec3(0.78, 0.78, 0.75);     // linear
 uniform float rough_coat = 0.88;
 uniform float rough_damp = 0.25;
 

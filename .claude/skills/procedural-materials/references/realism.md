@@ -81,11 +81,14 @@ A facade base sits around 0.80–0.92, moved ±0.05–0.2 by those causes.
   has the same blob density everywhere: patchy up close, uniform at 45 m.
 - **Background floor:** each layer stays at 10–20 % of its hotspot strength outside the
   clusters.
-- **Target statistics** for a facade, measured by a `statistics` COP or from a render, as value
-  deviation from the base *(est.)*:
-  - 70–80 % within ±3 %;
-  - 15–25 % moderate;
-  - 5 % or less heavy.
+- **Target statistics** for a facade, as the weathering's own local contrast: the darkening against
+  the cleanest 10 cm patch within ±1 m, so a wall that is uniformly darker reads as its paint, not
+  as weathering (the danchi rule A1, measured on photographed walls):
+  - ordinary walls: a median of 52 % of the wall 5 % or more darker, 9 % 10 % or more, 3.4 % 18 %
+    or more (ranges 8–66 %, 5–25 %, 2–12 %);
+  - heavily stained walls: 88–98 % and 63–96 % at the first two levels;
+  - a kept block sits well under the median and a derelict one over it. The older estimate
+    (70–80 % within ±3 %) was far too clean.
 - **One cause field.** Damp, streak, roughness drop, algae, rust run and peeling all read the
   same source: a leak point, a sill, a primvar from the generator. Correlated layers read as
   physics.

@@ -32,6 +32,7 @@ damage and repeated the uniform streak fringe the references warn against.
 | Phase 4, golden bay; Phase 6, facade | `procedural-materials/references/weather-and-use.md`, plus the streak scripts (`streak_sources`, `streak_mask`, `micro_fields`) in `procedural-mesh-damage` |
 | Unique or hero pieces whose wear depends on flow or history | `procedural-mesh-damage/references/wear-simulation.md` (recipes not yet tested) |
 | Phase 6, facade and building texturing | `large-scale-texturing/SKILL.md` and its `references/texturing-at-scale.md`: never bake a facade's look into one unique low-res sheet |
+| Phases 0, 7 and 9: spec, export, review | `docs/redesign/research/README.md` (the research index, with each note's open and parked actions), `pro-asset-pipeline.md` (spec, validation, kits and instances, the two engine builds) and `art-review-and-qa.md` (player views, magnification, motion, definition of done) |
 
 ## The idea: quality is built recursively, from the smallest piece up
 
@@ -121,6 +122,19 @@ the hip and the gate images at every gate.
   - the style;
   - which parts the player enters;
   - 3–6 signature features per style that make it readable at a distance.
+- **Write the metrics sheet and the technical spec with it** (`spec.json` beside the README, read by
+  the checks; a density written only in prose is never measured):
+  - the engine and its FOV axis (Unreal 90° horizontal; Godot 75° vertical), the screens (1,920 and
+    3,840 px wide), eye height 1.6 m;
+  - the **nearest approach of each surface class** (entrance and stair core about 0.5 m, walkway
+    walls 0.5–1 m, balcony fronts from the street 5–15 m, a facade across a courtyard 20–40 m) and
+    the carrier and texel density each class gets (±25 %), so that the screen gets at most 2 px per
+    texel there (`large-scale-texturing` check T0);
+  - budgets: triangles per piece and LOD, at most 3 material slots per piece and 8 per building,
+    texture memory per building and shared.
+- **De-risk the engine path at once:** import one piece with its textures into the target engine
+  (Godot 4.7 and Unreal 5.8 are installed on this machine) and render it. In the danchi project no
+  shader ran in an engine for nine rounds, so every defect the engine adds stayed invisible.
 - Gather reference for every level: close-ups of real details (frames, joints, fixings, wear)
   as well as whole buildings.
 - **Study the photographs; don't just collect them.** Look at 20 or more per subject, using a
@@ -136,7 +150,7 @@ the hip and the gate images at every gate.
   - materials inside an asset reach the renderer;
   - the export keeps what the engine needs.
 - **Gate:** README with brief, budgets (triangles per piece and per LOD, texture memory),
-  signature features, de-risk results.
+  signature features, de-risk results; `spec.json` with the metrics sheet; one engine render.
 
 ### 1. The contract
 
@@ -177,8 +191,9 @@ Take the piece players see most, such as the window bay's frame and panel, all t
 
    Bevel width is a fixed world size per kit, for example 1 cm, and should be visible at the
    piece's judging distance. A constant bevel is the convention. Its sameness is broken
-   by what the edge carries: wear in runs along the edge, about half to two thirds of each
-   edge clean, and a roughness difference where the edge is worn.
+   by what the edge carries: wear in runs along the edge, broken at light wear (30–60 % of each
+   edge clean) and near continuous at heavy wear (0–15 % clean; the danchi rule N2), and a
+   roughness difference where the edge is worn.
 4. **Damage and wear:** where the piece really gets hit, clustered (above). Use the
    `procedural-mesh-damage` skill: geometry for silhouette breaks, the bake for small nicks,
    seams kept clean, seeded per instance, and a share of instances left with background wear
@@ -194,9 +209,13 @@ Take the piece players see most, such as the window bay's frame and panel, all t
    bay distance. Not alone in a void.
 
 - **Gate:**
-  - a close-up that would pass in a portfolio crop;
+  - a close-up that would pass in a portfolio crop, from a player's camera at the piece's nearest
+    approach, shown at 1:1 screen pixels and labelled with its renderer;
+  - texel density measured from the exported UVs against `spec.json` (±25 %, neighbours within
+    1.25×), not read from the authoring settings;
   - triangle count against budget;
-  - the piece validated: closed, UVs complete, seams unchanged.
+  - the piece validated: closed, UVs complete, seams unchanged;
+  - the piece rendered in the target engine with its own textures.
 
   If it does not hold up at arm's length, nothing above it will.
 
@@ -218,7 +237,8 @@ Take the piece players see most, such as the window bay's frame and panel, all t
 - Light it as the final scenes will be lit. This bay is the quality bar for everything else.
 - **Gate:** a lit render of the bay at street distance next to reference, and a grayscale
   version for value structure. Write down what makes it good, and use it as the checklist for
-  every other bay.
+  every other bay. Render the bay in the target engine too (Godot: Movie Maker frames at 2, 10 and
+  30 m, 1080p and 4K) and compare it with the authoring render; judge in the engine from here on.
 
 ### 5. Build-out (the rest of the kit)
 
@@ -275,12 +295,27 @@ At each level run the three passes and review at that level's distance.
 - Detail that belongs to LOD0 only (damage, props, small fixings) branches off after the LOD
   split, so LOD1 is built from undamaged sources. Otherwise it leaks into the lower LODs
   without notice.
-- Collision: convex hulls per volume, with thin masts kept separate, named `UCX_<mesh>_NN`.
-- Delivery: instances for kit pieces, FBX per LOD, USD with LOD variants and material
-  bindings.
-- **Gate:** re-import into a fresh scene and render with only its own textures. Check
-  triangle counts, UV sets, material slots and collision names. See
-  [references/game-output.md](references/game-output.md).
+- Collision: convex hulls per volume, with thin masts kept separate, named `UCX_<mesh>_NN`; for
+  Godot, `-colonly` primitives and `-occonly` occluders generated from the plan (Godot bakes no
+  occluders from MultiMesh).
+- Delivery: **kit meshes plus an instance list** (Houdini Engine instancers, a USD point instancer,
+  or a Godot scene with one MultiMesh per piece type per facade), merged only for HLOD; FBX per
+  LOD; USD with LOD variants and material bindings. A single merged LOD0 defeats instancing,
+  streaming and the draw-call budget. Fold minor material slots into one atlased material and vary
+  pieces through per-instance data, not new materials.
+- **Two builds from one plan:** Unreal with Nanite (kit pieces Nanite, glass, decals and anything
+  translucent as separate non-Nanite meshes, no LOD chain, HLOD) and Godot (authored LODs on
+  visibility ranges, Visibility Parent to a merged HLOD, the renderer named in the brief: only
+  Forward+ has every feature).
+- **Validate every export automatically** over the preset strip and at least 4 seeds (`asset_check`
+  in [references/game-output.md](references/game-output.md)): texel density measured from the UVs
+  against `spec.json`, slots and triangles at the heaviest preset, Nanite vertex:triangle under 2,
+  texture sides, collision names, names stable across regenerations, the texture lint and the
+  carrier check of `large-scale-texturing`. Export a hand-off test asset each round (a 1 m cube with
+  a +Z arrow, a normal-map bump, a linear vertex-colour ramp, a non-power-of-two texture) to catch
+  silent unit, axis, normal-Y and colour-space faults.
+- **Gate:** re-import into a fresh scene of the target engine and render with only its own textures.
+  Check triangle counts, UV sets, material slots and collision names; the validator passes.
 
 ### 8. Package
 
@@ -304,6 +339,16 @@ At each level run the three passes and review at that level's distance.
 
 ### 9. Final review
 
+- **Player views first, at 1:1 screen pixels, in the engine.** Perspective views at the engine's
+  FOV and 1.6 m eye height: touch (0.5–1 m), the walkway (2 m), across the path (5–10 m), across
+  the courtyard (20–40 m) and a block away (100 m, LOD1), each cropped, never scaled, with a 1.75 m
+  figure and a door for scale, and each labelled with its renderer and screen px/m. Beside each,
+  a magnification map (texels per screen pixel per carrier) and a checker pass. Then grazing (10–20°
+  down the facade), up from the base and down onto sills and copings, and a lighting set (design
+  sun, overcast, the shaded front, night if windows matter, a neutral lookdev) at fixed exposure.
+  Then motion: a walk, a pan along the facade and a dolly through every LOD, checked for shimmer
+  and for luminance jumps over 3 % at switches. Elevations and orthographic crops come after, as
+  diagnostics: a texture viewed at its own density always looks 1:1.
 - A close-up of the golden bay, a street view, a building view, the 9-up sheet, night if
   windows matter, and a cut-away if interiors exist. Look at every image.
 - Present it the way a photographer would, or the render gives it away:
@@ -315,6 +360,11 @@ At each level run the three passes and review at that level's distance.
   An aerial over a bare plane reads as a miniature.
 - An honest assessment by level: which levels meet the bar, which are placeholder, and what a
   human artist should still do.
+- **Definition of done** (every item holds): the rule gates and texture checks pass; magnification
+  passes at every declared nearest approach, with no player view holding more than 5 % of its wall
+  pixels above 2 screen px per texel; engine parity on the golden crop (mean ΔE00 ≤ 2); the motion
+  checks pass; LOD value match within ±3 %; the export validator and texture lint are clean; and
+  the review page leads with 1:1 player views, every image naming its renderer and screen px/m.
 
 ## Rules
 
@@ -343,6 +393,16 @@ At each level run the three passes and review at that level's distance.
   layer (`procedural-materials/references/stylisation-anime.md`) and judged with
   `--profile painterly`. See `references/art-direction.md`.
 - **Test night and glass early** when windows matter.
+- **Review the product, not a stand-in.** Every danchi round's images came from a renderer that hid
+  the next defect (a 50 px/m sheet hid texel density; diffuse previews hide roughness; a numpy
+  mirror hides the shaders). Say which renderer made each image, and put the target engine in the
+  loop from the golden bay on.
+- **A finding counts only when a check uses it.** Research lands as advice unless it becomes a rule
+  or check with a number that the pipeline runs on what ships; in round J's audit only 23 % of 615
+  findings had. Every research note ends in an action table (finding, carrier, target file,
+  status: open, done with the commit, or parked with a reason and a trigger to revisit), a round
+  closes only when `scripts/research_actions.py` shows no open row, and a proposal adopted weaker
+  or not at all gets a recorded reason. The index is `docs/redesign/research/README.md`.
 
 ## Using HocusPocus for this
 

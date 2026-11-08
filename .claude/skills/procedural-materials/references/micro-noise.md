@@ -25,7 +25,7 @@ grain (high-pass) in a window 4–8× the grain size:
 
 | Measure | Uniform (fails) | Target |
 |---|---|---|
-| p90 / p10 of local std | about 1.1 | 3–6 |
+| p90 / p10 of local std | about 1.1 | 3–30 (photographed walls: median 12.5) |
 | Coefficient of variation of local std | under 0.1 | 0.4–0.8 |
 | Kurtosis of the grain | about 3 | 5–20 |
 | Mean local std, named zone vs another (worn/fresh, top/bottom of a pour lift) | 1× | 2–4× |

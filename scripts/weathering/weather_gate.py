@@ -15,6 +15,7 @@ and a meta.json: {"config": {...preset, age, upkeep, E, controls...},
 
   python -I weather_gate.py check <config_dir> [--rules weather_rules.json] [--json out.json]
   python -I weather_gate.py series <kind> <dir1> <dir2> ...   (kind: presets | sweep:<layer>)
+  python -I weather_gate.py texture <config_dir>                (T0-T3 and the close-up parts of P3, R7)
 
 Exit code 0 only when every binding rule that applies passes. Rules whose inputs are missing
 report "na"; for acceptance they count as failures unless --allow-na is given.
@@ -37,6 +38,7 @@ import gate_n as gn  # noqa: E402
 import gate_h as gh  # noqa: E402
 import gate_i as gi  # noqa: E402
 import gate_r as gr  # noqa: E402
+import gate_j as gj  # noqa: E402
 
 CLASSES = {0: "none", 1: "paint", 2: "coping", 3: "soffit", 4: "concrete", 5: "plinth", 6: "glass",
            7: "metal", 8: "prop", 9: "decal"}
@@ -124,6 +126,8 @@ def local_img(p):
             wall &= ~np.asarray(p["edge"]).astype(bool)
         if "L_wear" in p:                  # and the edge layer's chips
             wall &= ~(np.abs(np.nan_to_num(p["L_wear"].astype(np.float32))) > 1e-4)
+        if "L_peeling" in p:               # J26: and the peeling layer's flakes (P1-P3 measure them)
+            wall &= ~(np.abs(np.nan_to_num(p["L_peeling"].astype(np.float32))) > 1e-4)
         # the weathering's own local contrast: base paint tones (element to element) do not count
         Y = 1.0 - np.nan_to_num(p["D"].astype(np.float64))
         c["img"], c["ppm"] = wm.local_contrast_D(Y, wall, p["ppm"])
@@ -1185,7 +1189,7 @@ CONFIG_RULES = [rule_A0, rule_A1, rule_A2, rule_A3, rule_B1, rule_B2, rule_B3, r
                 rule_E1, rule_F1, rule_F2, rule_F3, rule_F4, rule_G1, rule_G2, rule_G3, rule_G4, rule_H1, rule_H2,
                 rule_H3, rule_I1, rule_I2, rule_J1, rule_J2, rule_K1, rule_K3, rule_K4,
                 gg.rule_G5, gp.rule_G6, gg.rule_H4, gg.rule_H5, gc.rule_I3,
-                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + [gh.rule_R1] + gi.RULES + gr.RULES
+                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + [gh.rule_R1] + gi.RULES + gr.RULES + gj.RULES
 
 
 LAYER_RULES = ("C2", "C3", "F2", "G1", "H2", "I1")
@@ -1223,7 +1227,7 @@ def summary(results, allow_na=False):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("mode", choices=["check", "series"])
+    ap.add_argument("mode", choices=["check", "series", "texture"])
     ap.add_argument("args", nargs="+")
     ap.add_argument("--rules", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "weather_rules.json"))
     ap.add_argument("--json")
@@ -1235,6 +1239,11 @@ def main():
         cfg, out = check_config(a.args[0], R, sweep=a.sweep)
         s = summary(out, a.allow_na)
         report = {"config": cfg, "rules": out, "summary": s}
+    elif a.mode == "texture":
+        import wx_texcheck as tc
+        out = tc.check(a.args[0])
+        s = summary(out, True)                  # a close-up with nothing to measure is not a failure
+        report = {"texture": a.args[0], "rules": out, "summary": s}
     else:
         kind, dirs = a.args[0], a.args[1:]
         runs = [load_config(d) for d in dirs]

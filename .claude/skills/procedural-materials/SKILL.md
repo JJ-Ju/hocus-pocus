@@ -21,6 +21,12 @@ headless and write correct files.
   normal blending, packing, and what to bake versus layer in the shader;
 - [references/concrete.md](references/concrete.md) for concrete, bare or under a coat: the
   finish per element, the formwork module, the layer stack, recipes and the engine path;
+- [references/paint-rust-concrete.md](references/paint-rust-concrete.md) for the close-up:
+  paint that fails as a stack (older coat first, concrete last, by ISO 4628-5 amounts and where
+  water stays), rust on painted steel in rings (old core, fresh margin, exposed metal, blisters)
+  with runs down the uprights, concrete voids, aggregate shadows and flecks by number, the coat's
+  chroma drift, masks from the geometry (corners, recesses, top edges), and what reads at each
+  distance;
 - [references/weathering-rules.md](references/weathering-rules.md) for weathering by number:
   opacity tiers, scale levels, coverage by age and upkeep, growth by wetness class, mark colour
   families, rust by grade that follows the water along the members (feet and joints first, runs
@@ -98,7 +104,7 @@ Copernicus works in linear; the sRGB numbers are what land in a PNG.
 
 | Material | Base colour | Roughness | Metallic |
 |---|---|---|---|
-| Fresh concrete | ~0.51 linear (~189 sRGB); aged darker | 0.75–0.95 | 0 |
+| Fresh concrete | ~0.51 linear (~189 sRGB); aged darker | formed skin 0.55–0.7; weathered 0.75–0.85; sand streaks and abrasion 0.85–0.95 | 0 |
 | Asphalt | 0.02 fresh to 0.08 worn linear | 0.85–0.95; polished aggregate 0.6–0.75 | 0 |
 | Iron, steel | (0.56, 0.57, 0.58) linear | 0.3–0.6 bare | 1 |
 | Painted metal | the paint colour | gloss 0.3–0.55, matte 0.6–0.8 | 0 |
@@ -135,7 +141,8 @@ values are Unreal's measured figures.
    (mode stretch).
 4. **Derived maps.**
    - **Normal:** `heighttonormal` with `scale` = relief depth (m) ÷ (tile width (m) ÷ 2),
-     usually exaggerated 1.5–3×. A scale of 8 on a 2 m tile is far too strong.
+     × 1.0–1.5 at most. No calibrated numbers exist, and critiques name normals that are too
+     strong, not too weak. A scale of 8 on a 2 m tile is far too strong.
    - **AO:** `heighttoambientocclusion` (`heightscale`, `viewradius`).
    - **Curvature:** `curvature`. Check its range with a `statistics` COP and stretch it to 0–1
      (`equalize`) before writing 8-bit.
@@ -189,7 +196,9 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
 2. **Cluster, with a background.** About 80 % of each notable layer sits on 15–25 % of the
    area, at a cluster scale at least as large as the frame. Every layer keeps 10–20 % of its
    strength elsewhere. This holds at the micro scale as much as the macro (item 10). Multiply cause × large clusters × medium × small, then threshold. Check
-   it with statistics: about 70–80 % of the facade within ±3 % of the base value.
+   it with statistics on the local contrast (references/realism.md): on ordinary photographed
+   walls about half the wall is 5 % or more darker than its cleanest patch nearby, a tenth 10 %
+   or more, and a few per cent 18 % or more.
 3. **One cause field for every layer.** Damp, streak, roughness, algae, rust and peeling read
    the same source.
 4. **Roughness from causes.** Damp is darker and smoother; dust on top faces is rougher;
@@ -219,8 +228,8 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
 10. **The micro scale clusters too.** Fine grain is Gaussian noise times an amplitude field
     from the causes. It is denser at the top of each pour, sharper at fresh breaks, and
     flattened and dirt-filled where worn. Use clustered scatter with power-law sizes for
-    discrete features, and check the 90th/10th percentile spread of local contrast (target
-    3–6). See [references/micro-noise.md](references/micro-noise.md) for the per-surface
+    discrete features, and check the 90th/10th percentile spread of local contrast (photographed walls run
+    3–30, median 12.5; under 2 fails). See [references/micro-noise.md](references/micro-noise.md) for the per-surface
     catalogue.
 
 ## Story on tiling kits: in the shader

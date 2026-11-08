@@ -60,9 +60,10 @@ def w(dst, idx, src, out=0):
     dst.setInput(idx, src, out)
 
 
-def normal_scale(relief_m, tile_m, exaggerate=2.0):
+def normal_scale(relief_m, tile_m, exaggerate=1.25):
     """heighttonormal scale for a 0-1 height map: relief depth / (tile width / 2), since a
-    Copernicus image is 2 units wide. Artists usually exaggerate by 1.5-3x."""
+    Copernicus image is 2 units wide. Keep the exaggeration at 1.0-1.5x: critiques name normals
+    that are too strong (docs/redesign/research/rE-concrete.md)."""
     return exaggerate * relief_m / (tile_m / 2.0)
 
 

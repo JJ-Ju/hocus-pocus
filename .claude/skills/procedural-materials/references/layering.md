@@ -140,7 +140,7 @@ Build the stack in this order *(est.)*:
 
 | Technique | Copernicus (bake) | MaterialX in Karma (shader) |
 |---|---|---|
-| R1 reveal | `remap`, `blend` (subtract, add); `remap` threshold with a ramp | `mtlxsmoothstep` (`in`, `low`, `high`), low = 1 − a·(1+w); `a` from `mtlxgeompropvalue` |
+| R1 reveal | `remap`, `blend` (subtract, add); `remap` threshold with a ramp | `mtlxsmoothstep` (`in`, `low`, `high`) on an equalised height, low = 1 − a − ŵ, high = 1 − a + ŵ, ŵ = min(w/2, a, 1 − a); `a` from `mtlxgeompropvalue` |
 | R2 max height | `blend` add and max, then subtract, `clamp`, divide per channel | `mtlxmax`†, `mtlxsubtract`, `mtlxclamp`†, `mtlxdivide`†, `mtlxmix` |
 | Mix to a colour | `blend` (mode blend, mask) | `mtlxmix` (`fg`, `bg`, `mix`), `signature` color3 |
 | Mask stack | `maskcombine`: ordered layers with blend modes, blur and remap, then contrast, gamma and clamp | `mtlxmultiply`, `mtlxrange` |

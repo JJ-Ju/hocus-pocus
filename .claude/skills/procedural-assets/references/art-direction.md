@@ -54,7 +54,7 @@ study). A fringe under every coping is a stamp.
 
 **Read at distance.** Judge each level at its own viewing distance (`SKILL.md`). Detail that
 is noise at the true distance is a cost, not a gain. Micro grain must vary by cause (p90/p10
-of local amplitude 3–6; `procedural-materials/references/micro-noise.md`). Uniform grain reads as sandpaper.
+of local amplitude 3–30, median 12.5 on photographed walls; `procedural-materials/references/micro-noise.md`). Uniform grain reads as sandpaper.
 
 **Presentation does not give it away** (`believability.md` 6):
 - camera at eye height, 1.5–1.7 m;

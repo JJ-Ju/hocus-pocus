@@ -57,6 +57,7 @@ COL = {
     "substrate": (0.51, 0.51, 0.495),
     "rust_bar": (0.13, 0.062, 0.028),
     "old_paint": (0.70, 0.69, 0.64),
+    "old_coat": (0.6923, 0.634, 0.5545),   # J21: the coat under a flake, a pale cream (L* 84, a* 0.8, b* 7.0)
     "edge_chalk": (0.83, 0.82, 0.78),       # chalked, rain-washed top arris
     "edge_dirt": (0.292, 0.256, 0.203),     # dirt on drip and lower edges: darker, warm (b* +9; N5 at 1.3x contrast)
     "crack": (0.05, 0.046, 0.040),
@@ -113,6 +114,8 @@ def auto_amounts(cfg):
     for k, v in AUTO_A.items():
         a[k] = float(np.clip(np.interp(age, AUTO_AGE, v) * care, 0, 1))
     a["peeling"] *= float(np.clip((0.8 - up) / 0.6, 0, 1.5))
+    if PEEL_BY_COAT:                        # round J: the coat's age decides (research coatings §2)
+        a["peeling"] = float(np.interp(R, PEEL_COAT_R, PEEL_COAT_A))
     a["repaint_patches"] = 0                # off by default: a control (cfg override), not part of the presets
     for k, v in cfg.get("override", {}).items():
         a[k] = v
@@ -925,7 +928,7 @@ def layer_streaks(plane, F, cfg, a, key, og=1.0):
         rx = nz.rng(*key, "jx", y, x)
         if rx.random() > 0.6 + 0.4 * a:
             continue
-        stamp_blob(acc, ppm, x, y, rx.uniform(0.03, 0.05), rx.uniform(0.25, 0.45) * (0.7 + 0.6 * a) * og, key + ("jxb", y, x),
+        stamp_blob(acc, ppm, x, y, rx.uniform(0.03, 0.05), rx.uniform(0.25, 0.45) * (0.7 + XING_A * a) * og, key + ("jxb", y, x),
                    ragged=0.4, hard=0.1)
         room = region_below(mask, y + 1, x, H) / ppm
         if room > 0.1:
@@ -1114,6 +1117,142 @@ def foot_splash(plane, F, sh, E):
     return reach.astype(F32), tex.astype(F32), spk.astype(F32), gain
 
 
+# round J: zones for the top band, top corners, inside corners and recess bottoms (F5, G7)
+ZONE_ON = True
+XING_A = 0.6                # seam-crossing heads grow with the streak amount (J13's 1.0 reverted in J25)
+F5_E = (14.0, 19.0)         # the top band and top corners come in from Worn to Derelict (soiling clock E)
+F5_K = (1.8, 3.1)           # their excess in the soiling field: band, top corners (J12: F5 band 1.33, corners 1.53;
+                            # J14: S 1.43, 1.62 at (1.6, 2.9), so a margin before the solver re-tunes)
+                            # J13: S band 1.34, corners 1.58 at (1.4, 2.6))
+F5_BAND_M = 0.45            # J13: the band's fall-off below the top (was 0.30: 1.73x at 5 cm, 1.10x by 0.5 m)
+F5_WET = 0.85               # top corners' growth wetness at Derelict
+G7_K = 1.30                 # inside corners' excess in the soiling field (0.1-0.4 m strips), from E 10 (J12)
+G7_KD = 0.50                # J13: more from E 14 to 20 (Derelict 1.25-2.0x; it measured 1.13-1.14)
+G7_REC = 0.60               # J12: recess faces (0.3 m or more behind the nearest wall around): not rain-washed
+G7_R = 0.35                 # its reach (m), gaussian (J13; was exp(-d/0.2)): 0.6 over the strip, 0.045 at 0.55-0.7 m
+G7_WET = (0.88, 0.68)       # growth wetness at corner bottoms (1 m above a floor) and recess bottoms (0.3 m)
+                            # (J22: recess bottoms 0.85 -> 0.68: thin bands raised M6 to 1.50 at Worn; G7 4.5-6.6x)
+PEEL_TOPEDGE = 0.15         # the peeling score's weight within 0.1 m of the wall top (F5: 15-50 % of the edge at Derelict;
+                            # J17: 0.25 gave the W gable 53 %)
+                            # J14: 0.45 gave the W gable 61 % once PEEL_BASE fell to 0.07)
+XING_SOIL, XING_R = 0.8, 0.05   # J14: water pauses where joints cross: soiling excess there, from E 14 to 20 (G5)
+ZONE_STAGE = 0.0            # J14 pushed the zone growth's stage (M2); J17: reverted, it greyed and greened it
+ZONE_ALPHA = 0.50           # J17: where water stands the growth is thick: opacity x (1 + this x the zone weight)
+                            # (J18: 0.25 left M2 at Worn at L* 50.2)
+G7_RB_M = 0.15              # J17 tried 0.10 (G7 bottom growth fell to 1.72x); J18: back to 0.15
+G7_RB_CUT = 0.3             # J21: the recess-bottom band's top (m above the floor line)
+RECESS_SOFT_M = 0.25        # J14: the recess weight blurred (m): no step 1.5-2.5 m from a nearer wall
+
+
+def plane_zones(plane):
+    """Cached per plane: dtop (m below the wall top, per column; -1 above it), dend (m from the plane's
+    nearer end), ic_d (m to the nearest inside-corner line in the row, at one depth), rb_up (m above
+    the nearest recess bottom line in the column, inside the wall)."""
+    if "_zones" in plane:
+        return plane["_zones"]
+    mask, ppm = plane["mask"], plane["ppm"]
+    H, W = mask.shape
+    tr = int(plane.get("top_row") or 0)
+    rows = np.arange(H)[:, None]
+    near_top = mask & (rows <= tr + int(1.0 * ppm))
+    first = np.where(near_top.any(axis=0), np.argmax(near_top, axis=0), -1)
+    dtop = np.where(first[None, :] >= 0, (rows - first[None, :]) / ppm, -1.0).astype(F32)
+    cols = np.flatnonzero(first >= 0)
+    xx = np.arange(W)[None, :]
+    if cols.size:
+        dend = (np.minimum(xx - cols.min(), cols.max() - xx) / ppm * np.ones((H, 1))).astype(F32)
+    else:
+        dend = np.full((H, W), 1e3, F32)
+    d = plane.get("depth")
+    ic_d = np.full((H, W), 1e3, F32)
+    rb_up = np.full((H, W), 1e3, F32)
+    if d is not None:
+        d = np.nan_to_num(np.asarray(d, np.float64), nan=1e3, posinf=1e3)
+        left = np.full((H, W), np.inf)
+        right = np.full((H, W), np.inf)
+        left[:, 1:] = np.where(mask[:, :-1], d[:, :-1], np.inf)
+        right[:, :-1] = np.where(mask[:, 1:], d[:, 1:], np.inf)
+        ic = mask & ((left < d - 0.05) | (right < d - 0.05))
+        big = np.float32(1e9)
+        dist = np.full((H, W), big, np.float32)
+        for order in (range(W), range(W - 1, -1, -1)):
+            run = np.full(H, big, np.float32)
+            prev = None
+            for x in order:
+                ok = mask[:, x]
+                if prev is not None:
+                    ok = ok & (np.abs(d[:, x] - d[:, prev]) <= 0.05)
+                run = np.where(ic[:, x], 0.0, np.where(ok, run + 1.0, big))
+                dist[:, x] = np.minimum(dist[:, x], run)
+                prev = x
+        ic_d = (dist / ppm).astype(F32)
+        below = np.full((H, W), np.inf)
+        # J20: a recess's bottom is its floor line: m above the floor line below, on recess faces only (a
+        # nearer surface below is usually a parapet hiding the wall, not the junction where water stands)
+        fl = sorted(set([int(r) for r in (plane.get("floor_rows") or [])] + [int(plane.get("ground_row") or H - 1)]))
+        nxt = np.full(H, -1)
+        j_ = 0
+        for y in range(H):
+            while j_ < len(fl) and fl[j_] < y:
+                j_ += 1
+            nxt[y] = fl[j_] if j_ < len(fl) else -1
+        up_ = np.where(nxt >= 0, (nxt - np.arange(H)) / ppm, 1e3)
+        recb = (recess_of(plane) > 0.5) & mask
+        rb_up = np.where(recb, up_[:, None], 1e3).astype(F32)
+    plane["_zones"] = (dtop, dend, ic_d, rb_up)
+    return plane["_zones"]
+
+
+def zone_terms(plane, E):
+    """(band, corner, icorner, f5): the top band (0.05-0.6 m under the top), the top corners (1.5 x 1.5 m),
+    the inside-corner strips, and the F5 weight of this clock."""
+    dtop, dend, ic_d, rb_up = plane_zones(plane)
+    f5 = float(nz.smoothstep(F5_E[0], F5_E[1], E))
+    band = np.where(dtop >= 0, np.exp(-np.clip(dtop - 0.05, 0, None) / F5_BAND_M), 0.0) * (dtop <= 1.2)
+    corner = np.where((dtop >= 0) & (dtop <= 1.5) & (dend <= 1.5), np.exp(-dtop / 0.9) * np.exp(-dend / 0.9), 0.0)
+    icn = np.exp(-(ic_d / G7_R) ** 2) * (ic_d < 1.0)
+    return band.astype(F32), corner.astype(F32), icn.astype(F32), f5
+
+
+def xing_field(plane):
+    """J14: a gaussian of XING_R around each seam crossing (cached per plane)."""
+    if "_xing" in plane:
+        return plane["_xing"]
+    H, W = plane["mask"].shape
+    ppm = plane["ppm"]
+    xf = np.zeros((H, W), F32)
+    r = int(3 * XING_R * ppm) + 1
+    for (cy, cx) in joint_crossings(plane):
+        y0, y1, x0, x1 = max(cy - r, 0), min(cy + r + 1, H), max(cx - r, 0), min(cx + r + 1, W)
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        g = np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (XING_R * ppm) ** 2).astype(F32)
+        xf[y0:y1, x0:x1] = np.maximum(xf[y0:y1, x0:x1], g)
+    plane["_xing"] = xf
+    return xf
+
+
+def recess_of(plane):
+    """J12: 1 on wall standing 0.3 m or more behind the nearest wall within about 1.5-2.5 m in its row."""
+    if "_recess" in plane:
+        return plane["_recess"]
+    d = plane.get("depth")
+    mask = plane["mask"]
+    out = np.zeros(mask.shape, F32)
+    if d is not None:
+        d = np.nan_to_num(np.asarray(d, np.float64), nan=1e3, posinf=1e3)
+        dm = np.where(mask, d, np.inf)
+        front = dm.copy()
+        s = 1
+        while s <= int(1.5 * plane["ppm"]):
+            front = np.minimum(front, np.minimum(np.roll(front, s, 1), np.roll(front, -s, 1)))
+            s *= 2
+        out = (mask & (d - front >= 0.3)).astype(F32)
+        if RECESS_SOFT_M > 0:
+            out = (np.clip(wm_.gauss(out, RECESS_SOFT_M * plane["ppm"]), 0, 1) * mask).astype(F32)
+    plane["_recess"] = out
+    return out
+
+
 def soiling_field(plane, F, cfg, E):
     """The un-scaled soot film, built from causes: dry deposition everywhere (a floor, so no
     face is pristine: A2) with soft macro tone (S1-S3) and mid variation (S4-S6), more where
@@ -1144,6 +1283,13 @@ def soiling_field(plane, F, cfg, E):
     ut_mod = (ut_mod / ut_mod.mean()) * F.acctex              # broken up along each edge, per storey
     exc = exc + 0.9 * plane.get("under_top", np.zeros(sh)) * ut_mod
     exc = exc + 0.7 * plane.get("corner_prox", np.zeros(sh))
+    if ZONE_ON:                                               # round J: top band and corners (F5), inside corners (G7)
+        band_, corner_, icn_, f5_ = zone_terms(plane, E)
+        g7_ = float(nz.smoothstep(8.0, 12.0, E))
+        g7k = G7_K + G7_KD * float(nz.smoothstep(14.0, 20.0, E))
+        exc = exc + f5_ * (F5_K[0] * band_ + F5_K[1] * corner_) + g7_ * (g7k * icn_ + G7_REC * recess_of(plane))
+    if XING_SOIL > 0 and E > 14.0:
+        exc = exc + XING_SOIL * float(nz.smoothstep(14.0, 20.0, E)) * xing_field(plane)
     phys = 0.70 + 0.50 * exc                                  # half as tone, half as deposits
     phys = phys * plane.get("lee", 1.0) * (1.0 - 0.55 * plane.get("washed", np.zeros(sh)))
     phys = phys * (HGT_RAIN[0] + HGT_RAIN[1] * F.hgt ** HGT_RAIN[2]) * F.ends   # driven rain: the top storeys get more
@@ -1435,6 +1581,26 @@ def bio_wetness(plane, F, stains=None, streaks=None, chips=None, key=("bw",)):
     cp = plane.get("corner_prox")
     if cp is not None:                                   # inside corners: damp 0.1-0.3 m each side
         w = np.maximum(w, (o * 0.75 * np.clip(cp / 0.6, 0, 1) ** 0.35).astype(F32))
+    if ZONE_ON:                                          # round J: corner and recess bottoms (G7), top corners (F5)
+        E_ = float(plane.get("_E", 0.0))
+        band_, corner_, icn_, f5_ = zone_terms(plane, E_)
+        dtop_, dend_, ic_d_, rb_up_ = plane_zones(plane)
+        fl_ = [int(r) for r in (plane.get("floor_rows") or [])] + [int(plane.get("ground_row") or H - 1)]
+        rows_ = np.arange(H)
+        nearfl = np.zeros((H, 1), bool)
+        for r_ in fl_:
+            nearfl[:, 0] |= ((r_ - rows_) >= 0) & ((r_ - rows_) <= 1.0 * ppm)
+        cbot = (ic_d_ <= 0.4) & nearfl
+        z1 = G7_WET[0] * cbot * np.exp(-ic_d_ / 0.25)
+        z2 = G7_WET[1] * np.exp(-np.clip(rb_up_, 0, None) / G7_RB_M) * (rb_up_ <= G7_RB_CUT)
+        w = np.maximum(w, (o * z1).astype(F32))
+        w = np.maximum(w, (o * z2).astype(F32))
+        zw = np.maximum(z1, z2)
+        if f5_ > 0:
+            z3 = F5_WET * f5_ * np.clip(corner_ * 1.6, 0, 1)
+            w = np.maximum(w, (o * z3).astype(F32))
+            zw = np.maximum(zw, z3)
+        plane["_zone_wet"] = np.clip(zw / 0.88, 0, 1).astype(F32)     # J14: for the growth stage (M2)
     w = np.maximum(w, (o * 0.62 * np.sqrt(np.clip(F.jwet, 0, 1))).astype(F32))
     for (cy, cx) in joint_crossings(plane):              # where two joints cross the wall is wettest
         ya, yb, xa, xb = max(0, cy - 3), min(H, cy + 4), max(0, cx - 3), min(W_, cx + 4)
@@ -1539,6 +1705,8 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     old = nz.smoothstep(BIO_DARK[0], BIO_DARK[1], Am) * wetter
     amax = np.interp(Wt, BIO_W, list(BIO_AMAX))   # biomass is limited by water: open wall stays a film
     alpha = (amax * (BIO_A[0] + BIO_A[1] * old) * rho * ((0.6 + 0.4 * mott) * (1 - old) + (0.9 + 0.1 * mott) * old) * mask).astype(F32)
+    if ZONE_ALPHA > 0 and "_zone_wet" in plane:             # J17: thick growth where water stands (M2)
+        alpha = np.minimum(alpha * (1.0 + ZONE_ALPHA * plane["_zone_wet"]), np.maximum(amax, alpha)).astype(F32)
     # colour by age and family
     fam = nz.gfield((H, W_), 0.8 * ppm, key + ("bfam",))
     cls = plane.get("cls")
@@ -1565,7 +1733,8 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     col = np.where(rust[..., None], rusty, np.where(yel[..., None], yellow, green))
     if BIO_CONTINUUM:
         jit = nz.gfield((H, W_), 0.6 * ppm, key + ("bstage",))
-        stage = np.clip(BIO_STAGE[0] + (1 - BIO_STAGE[0]) * nz.smoothstep(0.0, BIO_STAGE[1], Am) + BIO_STAGE[2] * jit, 0, 1)
+        stage = np.clip(BIO_STAGE[0] + (1 - BIO_STAGE[0]) * nz.smoothstep(0.0, BIO_STAGE[1], Am) + BIO_STAGE[2] * jit
+                        + ZONE_STAGE * plane.get("_zone_wet", 0.0) * (Am > 0), 0, 1)
         col = bio_ramp(stage)
     dry = (0.45 * nz.smoothstep(0.50, 0.20, Wt))[..., None]   # dry films stay lighter, hue toward yellow-olive
     if BIO_DRY_FAM:                                      # toward 90 deg from either side: green stays green-yellow
@@ -1740,6 +1909,7 @@ def layer_rust(plane, F, cfg, a, key, spalls=None, flow=None):
             import rust_flow as rfl
             pre, Ts = flow if flow is not None else (None, None)          # the building's clock (Builder)
             acc_r, flow_col, mk, _st = rfl.layer(plane, metal, a, rust_share(a), key, pre=pre, Ts=Ts)
+            plane["_rust_extra"] = {k_: _st.get(k_) for k_ in ("run_a", "run_c", "bare_a", "bare_c")}   # round J
             marks.extend(mk)
             # spall bleeds (acc so far, plain rust colour) under the flow layer
             c_sp = np.array(COL["rust"], F32)
@@ -2685,6 +2855,124 @@ def dirt_tint(name, tf):
             + wg[..., None] * T["green"]).astype(F32)
 
 
+# round J: paint failure exposing the concrete (user, round I). The amount sets the share of painted wall
+# where the film is gone, on the ISO 4628-5 flaking quantity grades (1 = 0.1 %, 3 = 1 %, 4 = 3 %, 5 = 15 %).
+PEEL_ON = True              # J15: on by default
+PEEL_AREA = ((0.08, 0.001), (0.30, 0.010), (0.55, 0.035), (1.0, 0.15))
+PEEL_W = (("chan", 0.15), ("crack", 0.45), ("effl", 0.20), ("edge", 0.25), ("base", 0.35), ("joint", 0.20),
+          ("top", 0.25))
+PEEL_SIGMA = 1.0            # the adhesion defects' spread (lognormal patchiness)
+PEEL_SOFT = 0.35            # soft threshold, in the score's std: flakes under 2 cm stay partial pixels
+PEEL_HALO_M = 0.08          # the checked film around the flakes (m)
+PEEL_DIRT = 0.5             # the exposed concrete carries this power of the wall's dirt ratio (J24: 0.7 gave L* 51 at
+                            # Derelict's foot, under the research's 55-68)
+PEEL_TOP_M = 0.3            # how far below a top (cap, sill) water behind the film reaches (m)
+PEEL_WARM = (1.01, 1.0, 0.985)  # J5: old exposed concrete is a little warmer than the fresh substrate grey
+                                # (J16: (1.02, 1.0, 0.95) gave C* 4.97 before dirt; P3 wants 4 or less)
+PEEL_DIRT_A = 0.3               # J16: the older coat (type a) carries this power of the wall's dirt ratio
+PEEL_B_W = 0.02                 # J21: the type split's half-width (score std): older coat or concrete, not a mix
+PEEL_BY_COAT = True         # J6: the amount from the years since the last repaint (Kept 4.7, Typical 5.8, Worn 10.3,
+PEEL_COAT_R = (5.0, 6.0, 10.0, 15.0, 20.0, 30.0)     # Derelict 14.6): stage 2 (cracks, peels) from 10-15 years,
+PEEL_COAT_A = (0.0, 0.05, 0.25, 0.60, 0.85, 1.0)     # stage 3 after about 20 unmaintained (NILIM, research)
+PEEL_B_SHARE = ((0.0, 0.15), (0.30, 0.20), (0.60, 0.45), (1.0, 0.60))   # J6: type-b share of the flaked area
+PEEL_CONC_LAB = (64.0, 0.3, 2.2)    # J6: old concrete under the coat, L* 55-68, C* <= 4 (research §2; J16; J24: L* 64)
+PEEL_W_EXTRA = (("rails", 0.30), ("drip", 0.25))      # J6: below the rails, along drip lines and slab noses
+PEEL_BASE = 0.07            # J13: the open wall's score floor (was 0.10, channels 0.30: Worn's open wall held 27 %)
+PEEL_AMAX = ((0.0, 0.5), (0.27, 0.55), (0.45, 0.8), (0.55, 1.0))   # J19: the most of a 2 cm pixel that is flaked,
+                            # by peel amount (Worn 0.27, Derelict 0.57): small separate flakes, then sheets
+
+
+def layer_peeling(plane, F, cfg, a, key, cracks=None, effl=None):
+    """Paint failure exposing the concrete (round J). Water behind the film lifts it: along the water's
+    channels, at cracks and joints, under efflorescence (salts push the film off), at the foot (rising
+    damp) and below tops (caps, sills); the film is thin at arrises. A lognormal adhesion field makes it
+    patchy, the sun-facing front a little more. The amount sets the exposed share (PEEL_AREA); the score
+    does not depend on it, so a higher amount's flakes contain the lower one's and grow by merging.
+    Returns alpha (exposed share per pixel), colour (the concrete, a tone per flake area) and the halo
+    where the film around the flakes is checked (the texture stage draws its crack network)."""
+    mask, ppm = plane["mask"], plane["ppm"]
+    H, W = mask.shape
+    z = np.zeros((H, W), F32)
+    if not PEEL_ON or a <= 0 or not mask.any():
+        return z, None, z
+    xs_, ys_ = [p_[0] for p_ in PEEL_AREA], [np.log(p_[1]) for p_ in PEEL_AREA]
+    share = float(np.exp(np.interp(a, xs_, ys_))) if a >= xs_[0] else PEEL_AREA[0][1] * a / xs_[0]
+    fx = {"chan": F.chan.astype(F32)}
+    fx["crack"] = (np.clip(wm_.gauss((cracks > 0.05).astype(F32), 0.05 * ppm) * 5.0, 0, 1)
+                   if cracks is not None else z)
+    fx["effl"] = (np.clip(wm_.gauss(effl.astype(F32), 0.03 * ppm) / max(float(effl.max()), 1e-6) * 3.0, 0, 1)
+                  if effl is not None and float(effl.max()) > 0 else z)
+    e = plane.get("edges")
+    fx["edge"] = np.clip(wm_.gauss(e.astype(F32), 0.02 * ppm) * 4.0, 0, 1) if e is not None else z
+    hm = (plane["ground_row"] - np.arange(H))[:, None] / ppm * np.ones((1, W))
+    fx["base"] = np.exp(-np.clip(hm, 0, None) / 0.5).astype(F32)
+    fx["joint"] = np.clip(F.jwet, 0, 1).astype(F32) if getattr(F, "jwet", None) is not None else z
+    tp = plane.get("tops")
+    tb = np.zeros((H, W), F32)
+    if tp is not None:
+        run = np.zeros(W, F32)
+        k_ = np.exp(-1.0 / (PEEL_TOP_M * ppm))
+        for y in range(H):
+            run = np.where(tp[y], 1.0, run * k_)
+            run = np.where(mask[y] | tp[y], run, 0.0).astype(F32)
+            tb[y] = run
+    fx["top"] = tb
+    st_ = plane.get("steel")
+    rb = np.zeros((H, W), F32)
+    if st_ is not None and st_.any():                     # J6: 0-0.5 m below the rails: their drips
+        run = np.zeros(W, F32)
+        k_ = np.exp(-1.0 / (0.25 * ppm))
+        for y in range(H):
+            run = np.where(st_[y], 1.0, run * k_).astype(F32)
+            rb[y] = np.where(mask[y], run, 0.0)
+    fx["rails"] = rb
+    bt = plane.get("bottoms")
+    fx["drip"] = (np.clip(wm_.gauss(bt.astype(F32), 0.05 * ppm) * 6.0, 0, 1) if bt is not None else z)
+    ex = sum(w * fx[k] for k, w in PEEL_W + PEEL_W_EXTRA)
+    if ZONE_ON:                                           # J: the wall top's edge (F5): water through the cap
+        dtop_ = plane_zones(plane)[0]
+        ex = ex + PEEL_TOPEDGE * ((dtop_ >= 0) & (dtop_ <= 0.10)).astype(F32) * float(nz.smoothstep(8.0, 19.0, float(plane.get("_E", 0.0))))
+    defect = nz.fbm((H, W), ppm, [5, 6, 7], key + ("adh",))
+    fine = nz.gfield((H, W), 0.7, key + ("adhf",))
+    score = np.log(PEEL_BASE + ex) + PEEL_SIGMA * (0.8 * defect + 0.45 * fine) + 0.15 * float(plane.get("face_sun", 0.0))
+    sm = score[mask]
+    soft = PEEL_SOFT * float(sm.std())
+    lo, hi = float(sm.min()) - 3 * soft, float(sm.max()) + 3 * soft
+    acap = float(np.interp(a, [p_[0] for p_ in PEEL_AMAX], [p_[1] for p_ in PEEL_AMAX]))   # J19
+    for _ in range(48):                                   # the threshold that exposes `share` of the wall
+        thr = 0.5 * (lo + hi)
+        if float(np.clip((sm - thr) / (2 * soft) + 0.5, 0, acap).mean()) > share:
+            lo = thr
+        else:
+            hi = thr
+    alpha = (np.clip((score - thr) / (2 * soft) + 0.5, 0, acap) * mask).astype(F32)
+    tone = np.clip(0.95 + 0.06 * nz.gfield((H, W), 0.15 * ppm, key + ("tone",)), 0.8, 1.1)
+    # J6: type b (to the concrete) is the deepest part of the failure, a share of the flaked area by amount
+    d_ = (score - thr) / max(float(sm.std()), 1e-6)
+    tb_share = float(np.interp(a, [p_[0] for p_ in PEEL_B_SHARE], [p_[1] for p_ in PEEL_B_SHARE]))
+    fl = (alpha > 0.02) & mask
+    if fl.any():                                          # the threshold whose alpha-weighted share is tb_share
+        av, dv = alpha[fl].astype(np.float64), d_[fl].astype(np.float64)
+        lo_b, hi_b = float(dv.min()) - 0.2, float(dv.max()) + 0.2
+        for _ in range(40):
+            t_b = 0.5 * (lo_b + hi_b)
+            if float((av * nz.smoothstep(t_b - PEEL_B_W, t_b + PEEL_B_W, dv)).sum() / av.sum()) > tb_share:
+                lo_b = t_b
+            else:
+                hi_b = t_b
+        wb = nz.smoothstep(t_b - PEEL_B_W, t_b + PEEL_B_W, d_).astype(F32) * (alpha > 0.0)
+    else:
+        wb = z
+    import rust_flow as _rfl
+    conc = np.array(_rfl.lab_to_lin(PEEL_CONC_LAB), F32) * np.array(PEEL_WARM, F32)
+    oldc = np.array(COL["old_coat"], F32)              # J21: its own colour (wear keeps old_paint)
+    tone_ = 1.0 + (tone - 1.0) * wb                          # J16: the older coat keeps its clean body (no 0.95)
+    col = ((oldc[None, None, :] * (1.0 - wb[..., None]) + conc[None, None, :] * wb[..., None]) * tone_[..., None]).astype(F32)
+    plane["_peel_conc"] = wb.astype(F32)
+    halo = (np.clip(wm_.gauss(alpha, PEEL_HALO_M * ppm) * 4.0, 0, 1) * (1.0 - alpha) * mask).astype(F32)
+    return alpha, col, halo
+
+
 def composite(plane, base_rgb, L, rec=None):
     """Apply the layers over the clean albedo. Returns weathered RGB, D, and L_<layer> maps (each
     layer alone over clean). On dark substrates, chips expose fresher concrete of the same tone
@@ -2716,7 +3004,7 @@ def composite(plane, base_rgb, L, rec=None):
         A = A2
         if rec is not None:
             rec.append(("crack_repair", "shift", {"alpha": m, "shift": d}))
-    for name in ("soiling", "stains", "streaks", "base", "bio", "rust", "cracks", "efflorescence"):
+    for name in ("soiling", "stains", "streaks", "base", "bio", "rust_run", "rust_bare", "rust", "cracks", "efflorescence"):
         if name not in L:
             continue
         al = family_alpha(name, L.get("_tint"), L[name]["alpha"], L[name].get("amount"))
@@ -2744,10 +3032,22 @@ def composite(plane, base_rgb, L, rec=None):
             al = L[name]["alpha"]
             cw = L[name].get("colour")
             cw = COL["old_paint"] if cw is None else cw
+            if name == "peeling" and PEEL_DIRT > 0:      # round J: the exposed concrete carries the wall's dirt
+                ratio = np.clip(A / np.maximum(np.asarray(base_rgb, F32), 1e-4), 0.3, 1.15)
+                wbp = L[name].get("conc")
+                pw = PEEL_DIRT if wbp is None else (PEEL_DIRT_A + (PEEL_DIRT - PEEL_DIRT_A) * np.asarray(wbp, F32))[..., None]
+                cw = (np.asarray(cw, F32) * ratio ** pw).astype(F32)   # J16: type a less dirty than type b
+                Yc, Yb = luminance(cw), luminance(base_rgb)          # J18: never lighter than the clean paint
+                cw = np.where((Yc > Yb)[..., None], cw * (Yb / np.maximum(Yc, 1e-6))[..., None], cw).astype(F32)
             Lm[name] = 1 - luminance(_lerp(base_rgb, cw, al)) / Y0
             A = _lerp(A, cw, al)
             if rec is not None:
-                rec.append((name, "lerp", {"alpha": al, "colour": cw}))
+                d_ = {"alpha": al, "colour": cw}
+                if name == "peeling" and L[name].get("halo") is not None:
+                    d_["halo"] = L[name]["halo"]
+                if name == "peeling" and L[name].get("conc") is not None:
+                    d_["conc"] = L[name]["conc"]
+                rec.append((name, "lerp", d_))
     if "damage" in L:
         sub, cav = L["damage"]["alpha"], L["damage"]["cavity"]
         cls = plane.get("cls")
@@ -2788,6 +3088,8 @@ class Builder:
     def __init__(self, planes, cfg, bases, rules=None):
         self.planes, self.cfg, self.bases = planes, cfg, bases
         self.R, self.E, self.a = auto_amounts(cfg)
+        for p_ in planes:                          # round J: zones that come in with the clock (F5, G7)
+            p_["_E"] = self.E
         self.rules = rules or json.load(open(RULES, encoding="utf-8"))
         self.F = {p["name"]: PlaneFields(p, cfg) for p in planes}
         self.soil_field = {p["name"]: soiling_field(p, self.F[p["name"]], cfg, self.E) for p in planes}
@@ -2843,6 +3145,11 @@ class Builder:
             flow = (pre.get(n), Ts)
         al, colr, _ = layer_rust(p, F, cfg, a["rust"], self.key("rust", p), spalls=spl, flow=flow)
         L["rust"] = {"alpha": al} if colr is None else {"alpha": al, "colour": colr}
+        ex = p.pop("_rust_extra", None) or {}                # round J: runs down the bars, bare steel
+        if ex.get("run_a") is not None and np.asarray(ex["run_a"]).any():
+            L["rust_run"] = {"alpha": ex["run_a"], "colour": ex["run_c"]}
+        if ex.get("bare_a") is not None and np.asarray(ex["bare_a"]).any():
+            L["rust_bare"] = {"alpha": ex["bare_a"], "colour": np.ascontiguousarray(ex["bare_c"])}
         al, _, mkc, cs = layer_cracks(p, F, cfg, a["cracks"], self.key("cracks", p))
         L["cracks"] = {"alpha": al, "colour": COL["crack"]}
         L["crack_repair"] = {"alpha": (cs.rep != 0).astype(F32), "shift": cs.rep}
@@ -2850,6 +3157,9 @@ class Builder:
         self.crk[n] = cs
         al2, _, _ = layer_efflorescence(p, F, cfg, a["efflorescence"], self.key("efflorescence", p), cracks=al)
         L["efflorescence"] = {"alpha": al2}
+        alp, colp, halo = layer_peeling(p, F, cfg, a.get("peeling", 0.0), self.key("peeling", p), cracks=al, effl=al2)
+        if alp.any():                                    # round J: paint failure exposing the concrete
+            L["peeling"] = {"alpha": alp, "colour": colp, "halo": halo, "conc": p.pop("_peel_conc", None)}
         al, colw, mkw = layer_wear(p, F, cfg, a["wear"], self.key("wear", p))
         L["wear"] = {"alpha": al, "colour": colw}
         marks["wear"] = mkw
@@ -2954,8 +3264,10 @@ class Builder:
                 m = m & ~(wear > 0)                        # and the edge layer's chips
             D = o["D"]
             tone.append(np.clip(D[m], -1.0, 1.0))
+            peel = o["layers"].get("peeling", {}).get("alpha")
+            ml = m & ~(peel > 0) if peel is not None and peel.shape == m.shape else m   # J26: and the flakes
             Y = 1.0 - D                                    # the weathering's own local contrast
-            Dl, lpp = wm.local_contrast_D(Y, m, p["ppm"] / st)
+            Dl, lpp = wm.local_contrast_D(Y, ml, p["ppm"] / st)
             loc.append(Dl[np.isfinite(Dl)])
             mk += [q for q in wm.marks(Dl, lpp, thr=TIER_EDGES[2]) if q["eqd_m"] >= 0.5]
         if mk:

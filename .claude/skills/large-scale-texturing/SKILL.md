@@ -31,7 +31,11 @@ prevent: it reads as "very, very low res" at street level, and a reviewer will a
   and pitfalls — hex tiling, histogram-preserving blends, band sampling for directional detail,
   the edge rule, mask upsampling, mip handling, slope blending, scatter, repetition tests.
 - The research behind them: `docs/redesign/research/texturing-at-scale.md` and
-  `docs/redesign/research/tiling-and-distribution-algorithms.md`.
+  `docs/redesign/research/tiling-and-distribution-algorithms.md`; for delivery and review,
+  `texture-and-material-standards.md` (encodings, import settings, mips, streaming, engine limits),
+  `art-review-and-qa.md` (player views, magnification, debug views, motion) and
+  `surface-detail-techniques.md` (mesh-map masks, paint stacks, rust anatomy, what reads at each
+  distance). The index, with each note's open and parked actions: `docs/redesign/research/README.md`.
 
 Companion skills:
 - **`procedural-materials`:** authoring the tiling sets, trims and decal atlases in Copernicus; its
@@ -41,9 +45,13 @@ Companion skills:
 
 ## The method
 
-1. **Fix the density first.** Pick the base texel density per surface class from the camera (table in
-   the reference). Every tiling set, trim and decal is authored to it; masks are not (they only say
-   where).
+1. **Fix the density from the player's camera first.** Write the metrics sheet before any texture:
+   the engine and its FOV axis (Unreal 90° horizontal; Godot 75° vertical by default), the screens
+   (1,920 and 3,840 px wide), eye height 1.6 m, and the **nearest approach of each surface class**
+   (entrances and stair cores about 0.5 m, walkway walls 0.5-1 m, balcony fronts from the street
+   5-15 m, a facade across a courtyard 20-40 m). The screen's density there is
+   `p = W / (2 tan(HFOV/2) d)`; each detail carrier needs `p / t ≤ 2` (check T0). Every tiling set,
+   trim and decal is authored to that density; masks are not (they only say where).
 2. **Split every look into the five carriers above.** Ask of each feature: is it the surface (tiling),
    a line (trim), a mark (decal), or an amount over the wall (mask)? A weathering layer is usually a
    mask *plus* a tiling detail it is revealed against.
@@ -57,10 +65,17 @@ Companion skills:
 5. **Reveal masks with the edge rule** (coverage kept, zero stays zero), and fade to the mask alone
    past about 25 m so distant views keep the amounts the masks were tuned to.
 6. **Put lines in trims and marks in decals**, placed by the same rules as the masks.
-7. **Preview in an engine mirror**: a numpy compositor that implements the same maths as the shader,
-   on geometry captured at the review density (`crop_capture.py`), so every review image is what
-   the engine would show.
-8. **Check** (T1-T3 below) and keep the budgets.
+7. **Review the product, from the player's camera.** A numpy mirror compositor (`wx_hires.py`, on
+   geometry captured at the review density with `crop_capture.py`) is a stand-in, not the product:
+   it hides what the shaders do differently (see Traps). Lead every review with player views at 1:1
+   screen pixels (never scaled), each labelled with its renderer (50 px/m sheet, numpy mirror,
+   Karma, Godot, Unreal) and its screen px/m; then a magnification map, grazing, up and down views,
+   and a lighting set. Render the golden crop in the target engine every round once the shaders
+   exist, and keep it within mean ΔE00 2 of the mirror. An image at the texture's own density is a
+   diagnostic: a 50 px/m sheet viewed at 50 px/m is 1:1 by construction, which is how the danchi's
+   one-sheet texturing passed four review rounds.
+8. **Check** (T0-T3 and the lint below, run by the pipeline before any review page) and keep the
+   budgets.
 
 ## The edge rule (coverage-preserving reveal)
 
@@ -86,13 +101,20 @@ flattening it.
 
 | Check | Measure | Pass |
 |---|---|---|
+| T0 magnification | screen px per metre at each surface class's nearest approach (4K, the engine's FOV) over each detail carrier's px/m | ≤ 2 for every carrier holding visible detail; masks may exceed it only where a detail reveals their edges (at 1 m on 4K a 50 px/m sheet is 38×) |
 | T1 density | every detail tile's px/m; the coat's detail | ≥ 1,000 px/m for close-ups (≥ 512 third person) |
 | T2 no tile period | correlation coefficient of the high-passed luminance at each tile period, minus its ring median, on open wall at 200 px/m | ≤ 0.15 (plain repeating tiles score about 0.98, hex-tiled about 0.00) |
 | T3 amounts kept | the fine composite box-filtered back to the mask density, against the coarse composite, on wall 2 cm or more from other surfaces | mean within 1 ± 0.03; 5th-95th percentile within 0.85-1.15 |
 | Budget | unique masks per building; shared library | ≤ 40 MB per building; ≤ 128 MB shared (Godot Mobile: 10 MB, textures ≤ 4096) |
-| Parity (release) | numpy mirror against an engine render of the same crop | mean ΔE00 ≤ 2 |
+| Parity (every round, once the shaders exist) | numpy mirror against an engine render of the same golden crop | mean ΔE00 ≤ 2; normal angle ≤ 5° |
+| Texture lint (every export) | sides; encodings against the engine import files; albedo percentiles per class; normal Y tag | sides a multiple of 4, a power of two when streamed, ≤ 4,096 for Godot Mobile and web; settings as in the import table below |
+| Carriers | every layer the gate measures or the mirror draws | each has a mask channel, a decal kind with an atlas cell, or a trim, or the export fails |
 
-`scripts/weathering/wx_texcheck.py` runs T1-T3 on a weathered build.
+`scripts/weathering/weather_gate.py texture <build>` runs T0-T3 (`wx_texcheck.py`) and the close-up
+parts of the material rules; the danchi pipeline (`pipeline_j.py`) runs it on every build and accepts a
+build only when it passes. A check nothing runs is advice, not a check. For the danchi, parity, the texture lint's
+encoding clauses and the carrier check do not run yet: they are parked until its engine round (the
+research index, `docs/redesign/research/README.md`); the export's size lint does run.
 
 ## Engine hookup
 
@@ -105,8 +127,29 @@ flattening it.
 - **Godot 4:** the same textures; masks per facade or in a `Texture2DArray`; Decal nodes only for
   about 50 hero marks (512 clustered elements in view; 8 decals per mesh on Mobile), mesh decals
   otherwise; the spatial shader `scripts/layered_facade.gdshader`.
-- Neither shader has been run in an engine on this machine yet: check parity against a numpy crop
-  before trusting either.
+- **Import settings are part of the asset** (engine defaults are wrong for this data: Unreal imports
+  a new texture as sRGB BC1/BC3, and Godot puts RGBA masks into DXT5, where three masks share one
+  colour line per 4 × 4 block). Write them with the export and check them:
+
+  | Class | Unreal | Godot 4 |
+  |---|---|---|
+  | weathering masks (RGBA, linear) | BC7, sRGB off, Never Stream or a facade UV1 | VRAM compressed, High Quality (BPTC), sRGB off, Fix Alpha Border off |
+  | reveal details (R8, equalised) | uncompressed G8, own mip chain (Leave Existing Mips) | lossless or uncompressed, own mips (DDS) |
+  | colour sets (base colour) | BC1/BC7, sRGB on | VRAM compressed, sRGB |
+  | normals | BC5, Flip Green on Copernicus (OpenGL Y+) maps | `hint_normal`, as authored (Y+) |
+  | ramps (growth stage) | uncompressed, no mips, clamp | lossless, no mips, `repeat_disable` |
+
+- **Unreal streaming cannot follow world-projected lookups:** it assumes UV0 at scale 1 and
+  under-streams a texture that repeats every T metres by log2 T mips (about 2 for a 3.6 m coat, 6 for
+  an 82 m mask). Write facade coordinates into UV1 at export and sample the masks from it, or keep
+  the masks resident (≤ 40 MB per building). Check with the texture-scale accuracy view.
+- **Units and axes.** Unreal works in centimetres with Z up: divide world positions by 100 before
+  any metre-based term (fade distances, tiling sizes). Godot works in metres with Y up.
+- **Colour constants carry their encoding.** Godot converts `source_color` uniforms from sRGB, so a
+  linear constant under that hint renders about 10 times too dark (0.094 → 0.009). Linear constants
+  take no hint; sRGB ones take it.
+- Neither shader had run in an engine by round J (the audit, `docs/redesign/research/research-to-practice-audit.md`
+  ranks 1-1d): render the golden crop and check parity before trusting either.
 
 ## Traps (found the hard way)
 
@@ -138,6 +181,26 @@ flattening it.
   correlation coefficient at the period minus its ring median.
 - **Layers on the wrong surface.** Upsample each layer over its own support (wall, steel) and mask it
   to its classes at the fine grid, or wall grime bleeds onto glass and frames.
+- **The review image is not the product.** Each danchi round's review images came from a stand-in
+  that hid the next defect: the 50 px/m sheet hid texel density; diffuse-only previews hide
+  roughness; the numpy mirror (B-spline masks, re-standardised mips, a 10 cm local maximum, the
+  generator's float stack) hides the shaders' bilinear masks, plain mips, `pk = 1.6 a` and
+  plain-tiled normal. Label each image with its renderer, and compare the mirror with an engine
+  render before trusting it.
+- **Implicit derivatives after random offsets break mips.** Hex and band tiling offset and rotate
+  each sample, so `texture()` takes its derivatives from discontinuous coordinates and picks the
+  wrong mip along cell edges: thin seams that only an engine shows. Take `dFdx`/`dFdy` of the
+  unoffset coordinate once and sample with `textureGrad` (`SampleGrad` in HLSL), the derivatives
+  rotated with the sample (Mikkelsen's reference). Filter reveal details anisotropically.
+- **The local opacity must be shipped, not guessed.** The shaders' `pk = clamp(1.6 a, 0.05, 1)`
+  turns every 3-62 % mark into a 62.5 % speckle with edges as soft as the mask; export the
+  smoothed 10 cm local maximum per channel and read it as `pk`.
+- **Sizes that do not compress or stream.** Masks of 4,095 × 1,815 px cannot be block-compressed
+  (sides must divide by 4) and Unreal does not stream non-powers of two: pad by edge extension to
+  the next power of two and keep the frame in `export.json`.
+- **A layer the gate measures but nothing ships.** Peeling, washed streaks, edge wear, breaks and
+  black growth were measured and previewed while the export carried none of them; the carrier check
+  catches that.
 
 ## Scripts
 

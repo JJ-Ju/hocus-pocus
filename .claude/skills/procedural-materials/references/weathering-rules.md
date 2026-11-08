@@ -1,13 +1,13 @@
 # Weathering rules
 
-Numeric rules for building weathering, checked by `scripts/weathering/weather_gate.py`. A weathered building is accepted only when every binding rule passes; nothing is shown before that. Version: 1.6 (round I).
+Numeric rules for building weathering, checked by `scripts/weathering/weather_gate.py`. A weathered building is accepted only when every binding rule passes; nothing is shown before that. Version: 1.7 (round J).
 
 Numeric rules for building weathering, measured in facade space (metres) on a darkening map D = 1 - Y_weathered / Y_clean. A configuration is accepted only when every binding rule passes. Origins: U = the user's review notes (review 36), P = measured on the reference photos, L = building physics and the soiling literature, C = craft estimate (to recalibrate with picks).
 
 ## Measures
 
 - **D**: darkening of albedo luminance against the same surface with no weathering: 0 clean, 0.10 = 10 % darker, negative = lighter
-- **D_local**: the weathering's own local contrast: D_local = 1 - (1 - D) / ref, ref = the least weathered 10 cm patch within +-1 m (smoothed), on 4 cm block means. A uniform darkening of a whole wall gives 0 (it reads as a paint colour, not as weathering: the user, review 36); paint tones that differ from element to element do not count either. T1 is below photo noise and material texture, so the amount rules start at T2. Arris rows and the edge layer's pixels are left out (the edge rules N1-N5 measure them).
+- **D_local**: the weathering's own local contrast: D_local = 1 - (1 - D) / ref, ref = the least weathered 10 cm patch within +-1 m (smoothed), on 4 cm block means. A uniform darkening of a whole wall gives 0 (it reads as a paint colour, not as weathering: the user, review 36); paint tones that differ from element to element do not count either. T1 is below photo noise and material texture, so the amount rules start at T2. Arris rows and the edge layer's pixels are left out (the edge rules N1-N5 measure them), and so are the peeling layer's (P1-P3 measure them).
 - **Opacity tiers** (lower bounds of D or D_local): T1 trace >= 0.02, T2 faint >= 0.05, T3 light >= 0.10, T4 medium >= 0.18, T5 heavy >= 0.30, T6 very heavy >= 0.45. each tier is about 1.6-2x the one below; T1 is near the threshold of seeing on a pale wall (about 1 L*), T4 is a clear stain, T6 a black crust
 - **Scale levels**: S1 16-32 m, S2 8-16 m, S3 4-8 m, S4 2-4 m, S5 1-2 m, S6 0.5-1 m, S7 0.25-0.5 m, S8 0.125-0.25 m. Groups: macro S1-S3, mid S4-S5, micro S6-S8. under 12.5 cm is the material's own texture (grain, pores, coat bumps): the material set and the tiling detail, checked by J rules on close crops
 - **Soiling clock E**: repaint cycle lerp(24, 7, upkeep) years; years since repaint min(age, 0.665 * cycle); E = years_since_repaint + 0.17 * (age - years_since_repaint). a building is on average two-thirds of the way through its repaint cycle, and 17 % of the dirt survives each repaint. Round H: rounds F and G both had the user pick the next-cleaner preset as the 35-year default; the old clock (the cycle's end, 22 % kept) made every age one level too weathered. Damage, cracks, rust, efflorescence, edges and fading follow age, not E
@@ -212,7 +212,7 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 - Measure: per plane, axis and map (soiling, stains, streaks, base, growth, D) on painted wall: the edge-energy profile's periodogram over its running median; the harmonic sum over the first 8 harmonics for periods of 16-600 px, the building's own rhythm (floor pitch, twice it, bay pitch, the 1.8 m scaffold lift, the peaks of the wall's feature map with its joints) left out; a layer is scanned on an axis only where it spans a third of it
 - Pass: the largest harmonic sum <= 9
-- Origin: U (round F: the grime reads as a grid); roundG/research/grid-breakup.md 5.1-5.2 (tile-free controls 4.0-7.9; round F's soiling 12.8 from the 3.6 m material tile; measured here 13.5-26 on round F's fronts)
+- Origin: U (round F: the grime reads as a grid); docs/redesign/research/weathering-grid-breakup.md 5.1-5.2 (tile-free controls 4.0-7.9; round F's soiling 12.8 from the 3.6 m material tile; measured here 13.5-26 on round F's fronts)
 
 
 ### Separability
@@ -338,43 +338,43 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 - Measure: share of the wall (paint and concrete) under a break (coverage >= 0.5)
 - Pass: 0.01-0.1 % at 0.25, 0.1-0.5 % at 0.5, 0.5-3 % at 0.75, 3-10 % at 1.0 (linear between)
-- Origin: U (round F: derelict at 1.0); L (roundG/research/cracks-edges-damage.md S1: 3.7-9.9 % at 75 years unmaintained); round F reached 0.54 % at 1.0
+- Origin: U (round F: derelict at 1.0); L (docs/redesign/research/weathering-cracks-edges-damage.md S1: 3.7-9.9 % at 75 years unmaintained); round F reached 0.54 % at 1.0
 
 **K6. Spalls start at edges**
 
 - Measure: spalls 30 mm across or more: share within 150 mm of an arris
 - Pass: >= 50 %
-- Origin: L (roundG/research/cracks-edges-damage.md S5: corners, slab noses, sills, parapet tops)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md S5: corners, slab noses, sills, parapet tops)
 
 **K7. Cracks from hairline to pattern cracks**
 
 - Measure: crack length per m2 of wall (width >= 0.05 mm), of cracks >= 0.3 mm, and the median width, pooled over exposed walls
 - Pass: length 0.2-0.6 / 0.5-1.2 / 1.0-2.0 / 1.5-3.5 m per m2 at 0.25 / 0.5 / 0.75 / 1.0; >= 0.3 mm 0.03-0.15 / 0.15-0.4 / 0.3-0.8 / 0.6-1.5; median 0.1-0.2 mm at 0.25 to 0.3-0.6 mm at 1.0 (linear between)
-- Origin: U (round F: 'cracks from hairline to pattern cracks'); L (roundG/research/cracks-edges-damage.md C1, C2, C4); round F had about 0 m per m2 (no opening corners reached the crack layer)
+- Origin: U (round F: 'cracks from hairline to pattern cracks'); L (docs/redesign/research/weathering-cracks-edges-damage.md C1, C2, C4); round F had about 0 m per m2 (no opening corners reached the crack layer)
 
 **K8. Cracks run mostly vertical**
 
 - Measure: length-weighted crack orientation, pattern cracks left out
 - Pass: vertical 40-65 %, diagonal 20-40 %, horizontal 10-25 %
-- Origin: L (roundG/research/cracks-edges-damage.md C7)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md C7)
 
 **K9. Diagonal cracks start at opening corners**
 
 - Measure: share of diagonal crack length within one opening width of an opening corner
 - Pass: >= 70 %
-- Origin: L (roundG/research/cracks-edges-damage.md C8: 45 deg cracks from window corners)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md C8: 45 deg cracks from window corners)
 
 **K10. Cracks read through what they carry**
 
 - Measure: median delta L* of the 1 px crack line against the wall around it, by width class (repaired cracks left out)
 - Pass: hairline (< 0.2 mm) <= 3; 0.2-0.5 mm 3-8; 0.5-1 mm 5-10; >= 1 mm 8-20
-- Origin: L (roundG/research/cracks-edges-damage.md C19 and 3.1: at 20 mm/px a crack shows through its halo, not its opening)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md C19 and 3.1: at 20 mm/px a crack shows through its halo, not its opening)
 
 **K11. Repaired cracks**
 
 - Measure: share of the length of cracks >= 0.3 mm under a repair stripe
 - Pass: 50-90 % at 0.25, 30-60 % at 0.5, 20-50 % at 0.75, 10-40 % at 1.0
-- Origin: L (roundG/research/cracks-edges-damage.md C23: U-cut and injected repairs on repainted danchi)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md C23: U-cut and injected repairs on repainted danchi)
 
 
 ### Controls
@@ -416,55 +416,55 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 - Measure: growth pixels at T2-T3 (growth making most of the darkening) against clean: b* shift per 0.1 of D; the share in the dirt band (b* <= +0.8)
 - Pass: b* +2.5 to +7.0 per 0.1 D; dirt band <= 10 %
-- Origin: U (round F: 'weaker growth should have a lighter green or very dull or rusty yellow look'); U (round H: the continuum starts at dark yellow, so the green and yellow family clauses of round G are dropped); L (roundG/research/organic-growth.md O1)
+- Origin: U (round F: 'weaker growth should have a lighter green or very dull or rusty yellow look'); U (round H: the continuum starts at dark yellow, so the green and yellow family clauses of round G are dropped); L (docs/redesign/research/weathering-organic-growth.md O1)
 
 **M2. Severe growth is dark green or rust brown**
 
 - Measure: the darkest growth (growth's own darkening >= 0.55, N, E and W walls; south walls grow moulds, O8): black share (C* < 8); of the rest, C* 10-26, hue 95-135 deg (green) or 40-75 deg (rust), and the darkest quarter's L*; from 2000 pixels
 - Pass: black <= 35 %; chroma band >= 75 %; hue band >= 75 %; 25th percentile of L* <= 50
-- Origin: U (round F: 'the visibly dark green/rust brown look that severe growth has'); L (roundG/research/organic-growth.md O2)
+- Origin: U (round F: 'the visibly dark green/rust brown look that severe growth has'); L (docs/redesign/research/weathering-organic-growth.md O2)
 
 **M3. Growth sits where water stays**
 
 - Measure: pooled over exposed walls: share of growth (T2+) in damp and wet zones (W2-W3, wetness >= 0.40); the cover of W2-W3 and of the open wall (W0-W1); the share in sunny open wall (W0, < 0.15)
 - Pass: while growth covers under 5 %: >= 70 % in W2-W3, from E 18 (Derelict) >= 50 %; beyond that, while W2-W3 are under 80 % covered, their cover >= 3x the open wall's; W0 <= 10 %
-- Origin: U (round F: corners, divots, edges, below ledges); L (roundG/research/organic-growth.md O4); U (round I: Derelict growth 'mostly in the same areas' - it spreads past the wet zones)
+- Origin: U (round F: corners, divots, edges, below ledges); L (docs/redesign/research/weathering-organic-growth.md O4); U (round I: Derelict growth 'mostly in the same areas' - it spreads past the wet zones)
 
 **M4. Plinth belt**
 
 - Measure: N, E and W walls: mean growth darkening in the bottom 0.3 m over the open wall (wetness < 0.4, not under another ledge or joint) 0.5-1.5 m above the foot; from 2 years of growth
 - Pass: >= 3.0
-- Origin: L (roundG/research/organic-growth.md O5: belt 5-30 cm, splash zone 30 cm)
+- Origin: L (docs/redesign/research/weathering-organic-growth.md O5: belt 5-30 cm, splash zone 30 cm)
 
 **M5. Time unattended adds area grown from the old patches**
 
 - Measure: the growth control's steps: growth area (T2+) ratio, the share of the added darkening on newly covered pixels, the share of old growth kept
 - Pass: area x >= 1.25 while W2-W3 are under 85 % covered; new share >= 50 %; kept >= 95 %
-- Origin: U (round F: 'algae and mold tend to grow outwards like tendrils or blobs, they don't merely get darker'); L (roundG/research/organic-growth.md O9)
+- Origin: U (round F: 'algae and mold tend to grow outwards like tendrils or blobs, they don't merely get darker'); L (docs/redesign/research/weathering-organic-growth.md O9)
 
 **M6. Ragged fronts, not smooth blobs**
 
 - Measure: growth patches (T2+) of 60 px or more on walls where growth covers 3 % or more: perimeter-area dimension (2 x the slope of log perimeter on log area)
 - Pass: 1.10-1.45
-- Origin: U ('tendrils or blobs'); L (roundG/research/organic-growth.md O12; box counting misread sparse patches, so the perimeter-area form)
+- Origin: U ('tendrils or blobs'); L (docs/redesign/research/weathering-organic-growth.md O12; box counting misread sparse patches, so the perimeter-area form)
 
 **M7. Onset by wetness class**
 
 - Measure: growth (T2+) cover of each wetness class's area at the build's years unattended (3.1, 5.7, 10, 22 years at growth amounts 0.25-1.0, log-linear between)
 - Pass: W3 >= 15 % from 1 year and >= 50 % from 3; W2 >= 10 % from 3 years and >= 30 % from 8; W1 >= 3 % from 8 years; W0 <= 5 % up to 15 years; no class over its ceiling (W0 0.30, W1 0.60, W2 0.90, W3 0.95) + 0.03
-- Origin: L (roundG/research/organic-growth.md O11 and 3.3: onset, time scale and ceiling per class from field timings)
+- Origin: L (docs/redesign/research/weathering-organic-growth.md O11 and 3.3: onset, time scale and ceiling per class from field timings)
 
 **M8. Fronts grow outward**
 
 - Measure: the growth control's steps: new growth (T2+) within 0.3 m of the previous step's growth (front growth) and farther away (new patches); a step from a wall with no growth yet (under 400 px) has no fronts and is not judged
 - Pass: front growth >= 70 %; new patches 5-30 %
-- Origin: U ('grow outwards'); L (roundG/research/organic-growth.md O10)
+- Origin: U ('grow outwards'); L (docs/redesign/research/weathering-organic-growth.md O10)
 
 **M9. Growth darkens and thickens with age**
 
 - Measure: the growth control's steps: the pixels that were growth (T2+) at the earlier step, at the later step
 - Pass: their L* down by 1.0 or more and their growth darkening up by 0.02 or more per step
-- Origin: U (round G: 'mold and mildew darken/intensify with age'; round F: 'dark green/rust brown' when severe); L (roundG/research/organic-growth.md O2)
+- Origin: U (round G: 'mold and mildew darken/intensify with age'; round F: 'dark green/rust brown' when severe); L (docs/redesign/research/weathering-organic-growth.md O2)
 
 
 ### Edges
@@ -473,31 +473,31 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 - Measure: the edge layer's mean |delta L*| on the 1 px edge row (painted wall)
 - Pass: 3-6 at 0.25, 4-8 at 0.5, 6-11 at 0.75, 7-14 at 1.0
-- Origin: U (round F: edge wear and discoloration visible at 0.25); L (roundG/research/cracks-edges-damage.md E9 and 5.5: at 20 mm/px visibility comes from the edge row, not a bevel)
+- Origin: U (round F: edge wear and discoloration visible at 0.25); L (docs/redesign/research/weathering-cracks-edges-damage.md E9 and 5.5: at 20 mm/px visibility comes from the edge row, not a bevel)
 
 **N2. The edge band is broken at 0.25, near continuous at 1.0**
 
 - Measure: share of edge length with the edge layer's |delta L*| >= 2
 - Pass: 40-70 % at 0.25 to 85-100 % at 1.0 (linear between)
-- Origin: L (roundG/research/cracks-edges-damage.md E8)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md E8)
 
 **N3. Visible chips**
 
 - Measure: chips 20 mm across or more per m of edge
 - Pass: 0.04-0.15 at 0.25 to 0.5-1.5 at 1.0 (linear between)
-- Origin: L (roundG/research/cracks-edges-damage.md E6)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md E6)
 
 **N4. Chips cluster**
 
 - Measure: chip counts in 0.5 m windows along the edges: variance over mean (20 chips or more)
 - Pass: >= 1.2
-- Origin: L (roundG/research/cracks-edges-damage.md E5)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md E5)
 
 **N5. Tops lighter, drip edges darker and warmer**
 
 - Measure: the edge layer's mean delta L* on top edges and on drip and lower edges; the b* shift on the drip edges
 - Pass: tops lighter (> 0); drip edges darker (< 0) with b* +1 to +4
-- Origin: L (roundG/research/cracks-edges-damage.md E9: tops chalked and rain-washed; drip edges dirt)
+- Origin: L (docs/redesign/research/weathering-cracks-edges-damage.md E9: tops chalked and rain-washed; drip edges dirt)
 
 
 ### Metal
@@ -544,6 +544,12 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 ### Texture
 
+**T0. Detail holds at the player's nearest approach**
+
+- Measure: magnification: screen pixels per metre at each surface class's nearest approach (p = W / (2 tan(HFOV/2) d), Unreal's 90 deg horizontal FOV on a 3,840 px screen; walls and railings 1.0 m) over each detail carrier's pixels per metre. The 50 px/m masks are reported, not judged: the detail reveals their edges
+- Pass: <= 2 screen pixels per texel for every detail carrier (wx_texcheck, run by weather_gate.py texture before any review page)
+- Origin: U (round I: the texturing miss, 'a big miss'); L (docs/redesign/research/art-review-and-qa.md §6.1-6.2: studios check on-screen magnification at the player's camera; Epic's texel-density and mip views)
+
 **T1. Detail at game texel density**
 
 - Measure: the detail tiles each layer is revealed against, and the coat: pixels per metre
@@ -561,6 +567,84 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Measure: the fine composite box-filtered back to 50 px/m against the build's own albedo, over walls 2 cm or more from another surface: luminance ratio
 - Pass: mean within 1 +- 0.03; 5th and 95th percentiles within 0.85-1.15
 - Origin: I (the 68 rules measure the 50 px/m maps; the detail must not change what they measured)
+
+
+### Peeling
+
+**P1. Coatings fail in the standard amounts and kinds**
+
+- Measure: painted walls by preset: the flaked share of the painted wall (the peeling layer's alpha, ISO 4628-5 quantity); the share of the flaked area that reaches the concrete (type b; the rest shows an older coat, type a)
+- Pass: Kept 0 (<= 0.02 %); Typical <= 0.1 %; Worn 0.3-1 %; Derelict 3-15 %; type b <= 25 % at Worn, 30-60 % at Derelict (checked once the flaked share is 0.1 % or more)
+- Origin: U (round I: 'if this is a painted or coated surface, then paint cracks, chipping, and peeling exposing the concrete below'); L (docs/redesign/research/coatings-concrete-corrosion.md §2: ISO 4628-5:2022 classes 0.1/0.3/1/3/15 %; NILIM TN 1182: the multilayer finish's top coat peels before the main coat reaches the concrete); C (the mapping to presets)
+
+**P2. Coatings fail where water stays**
+
+- Measure: the flaked area (alpha-weighted) in the zones where water gets behind the coat: within 0.3 m below tops (sills, upstands, parapets), along drip lines and slab noses (0.1 m), within 0.15 m of cracks and joints, 0-0.5 m below the rails, the splash zone 0-0.5 m above the foot; the rest is the open wall. Soffits are not in the planes' paint mask
+- Pass: from Worn: >= 65 % of the flaking in the zones; the open wall holds <= 20 % of it at Worn and <= 35 % at Derelict
+- Origin: L (docs/redesign/research/coatings-concrete-corrosion.md §2: NILIM public-housing survey, Nippon Paint: tops where water stays, NPS Brief 10: protected areas and water behind the coat; the foot's rising damp is the classic cause on masonry); C
+
+**P3. Flakes are crisp, layered and sized like flakes**
+
+- Measure: at 1 mm/px (wx_texcheck, the foot of the south front): the mean 0.9-0.1 width across flake outlines (pixels between 0.1 and 0.9 per outline pixel); the area-weighted flake size; type-b flakes' L* and C*; type-a flakes' L* and a*b* against the paint 3-8 mm out, past the lip
+- Pass: ramp <= 1.5 px; typical flakes 3-30 mm at Worn, 10 mm and up at Derelict (ISO 4628-5 size classes); type b L* 55-68 and C* <= 4; type a 2-10 L* lighter than the paint round it, or a hue step away (a*b* 2 or more apart, L* within 10)
+- Origin: U (round I: 'paint cracks, chipping, and peeling exposing the concrete below'); L (docs/redesign/research/coatings-concrete-corrosion.md §2: ISO 4628-5 sizes and types, the multilayer failure order; NPS Brief 10); P (r4-visual-reference: crisp curled flakes in layers); C
+
+
+### Metal
+
+**R7. The coating breaks before the steel rusts**
+
+- Measure: railing steel at 50 px/m: bare metal (the bare-steel layer) as a share of the steel by preset, and the share of it at the hand zone (the top rail), the joints or next to rust. At 1 mm/px (wx_texcheck, the rails close-up): for rust patches of 2 cm or more with 1 cm or more of edge on painted steel, the share of that edge with exposed metal or lifted paint (a rim cannot form on the member's outline)
+- Pass: bare metal 0.05-0.5 % of the steel at Typical, 0.3-2 % at Worn and Derelict, >= 60 % of it at the hand zone, joints or rust; on a rust sweep entry the share follows the control and only the placement clause binds; close-up: from rust 0.5, >= 50 % of patches have a rim on >= 30 % of their perimeter
+- Origin: U (round I: 'work in exposed metal here both around the edges of the rust and some exposed metal in general. Safe to assume it didn't just rust directly through the white enamel or coating right?'); L (docs/redesign/research/coatings-concrete-corrosion.md §3: edges, welds and thin peaks fail first; rust creeps under the film; docs/redesign/research/surface-detail-techniques.md §6: exposed metal or primer on 30-70 % of a patch's perimeter); C (shares)
+
+**R8. Rust runs down the uprights**
+
+- Measure: for each rusted joint with 5 cm or more of upright below it, the run on that upright from the joint's lower end (the run layer's alpha >= 0.06; 1-2 px holes in the steel mask inside the member are crossed): whether it reaches 5 cm, its length, and the colour difference against clean paint in its top quarter over its lowest quarter; the stained share of upright length; whether uprights with a run have a collar in the 5 cm above the bottom rail
+- Pass: from rust 0.5: runs >= 5 cm below 50 / 70 / 85 % of rusted joints (rust 0.5 / 0.75 / 1.0); median run 0.05-0.15 / 0.15-0.4 / 0.3-0.9 m; stained length 3-10 / 10-25 / 25-60 % (linear between); head >= 1.3x the tail; a collar on >= 50 % of uprights with a run. The runs are their own layer, so R1-R3 count corrosion only
+- Origin: U (round I: 'not seeing much rust gather vertically on the vertical rails. If the water continually drips down the vertical rails you would think there would be vertical streaks of rust'); P (rust note S43, S44a: runs below joints, whole uprights at derelict); L (docs/redesign/research/coatings-concrete-corrosion.md §3: the uprights drain the top rail; the film pools on the bottom rail); C
+
+
+### Colour
+
+**R9. Dark old rust and bright new rust side by side**
+
+- Measure: rusted steel from rust 0.5: the share in a dark class (L* <= 32) and a bright class (L* >= 46 and C* >= 30), where each sits (dark: feet, joints, the bottom rail, rail tops; bright: within 2 cm of a rust front), and the L* spread (p90 - p10) of all rust
+- Pass: dark 15-40 %, >= 60 % of it at those parts; bright 8-25 %, >= 60 % of it at fronts; L* spread >= 14
+- Origin: U (round I: 'mix in some areas of darker intense rusting, and slightly brighter new wet rust'); L (rust note §6: fresh lepidocrocite L* about 56, old 28-34, magnetite 25.5; thick rust has an ochre outer and a dark inner layer, docs/redesign/research/coatings-concrete-corrosion.md §3); C
+
+
+### Gradients
+
+**F5. Derelict's top band and top corners carry the most**
+
+- Measure: exposed walls: mean D (arris rows left out) in the band 0.05-0.6 m under the wall top and in the top corners (within 1.5 m of a wall end and of the top), each over the wall mean; growth T2+ cover in the top corners over the rest of the wall; the share of the top edge (within 5 cm) where the coat is peeled
+- Pass: from E 18: band >= 1.4x; corners 1.6-3x; corner growth >= 2x; top edge peeled on 15-50 % at Derelict and <= 5 % at Typical
+- Origin: U (round I, Derelict: 'Top edge and the top corners need a little bit more attention'); L (docs/redesign/research/coatings-concrete-corrosion.md §4: PCI DN-29, the top corners are the wettest part of a facade, up to 20-30x the face centre's rain; the top quarter takes 41-47 % of the driving rain; tops where water stays whiten and blister; corners carbonate 1.2-2x faster); C
+
+
+### Placement
+
+**G7. Inside corners and recesses collect a little more**
+
+- Measure: mean D in 0.1-0.4 m strips beside inside-corner lines (a nearer wall beside, at one depth) over the same rows' wall 0.6-1.5 m away, on planes where the strip and that wall each cover 1 m2 or more, and in 0.55-0.7 m (no outline); recess faces (0.3 m or more behind the nearest wall around) over the open wall, where both are large; from E 14, growth T2+ cover in the bottom 1 m of the corner strips and the bottom 0.3 m of recess faces above each floor line over the open wall
+- Pass: from E 10: corners 1.15-1.6x (Derelict 1.25-2.0x), <= 1.1x at 0.55-0.7 m; recess faces 1.1-1.5x; corner and recess bottoms' growth >= 2x from E 14
+- Origin: U (round I, Derelict: 'the corners and recesses could use a tiny bit more growth and dirt build up'); L (docs/redesign/research/coatings-concrete-corrosion.md §4: PCI DN-29, run-off concentrates at inside corners; set-backs are not rain-washed; NPS: protected areas are not rinsed; organic note W2); L (docs/redesign/research/surface-detail-techniques.md §2: masks from occlusion and corners, as Painter's and Houdini's mesh-map generators); C
+
+
+### Material
+
+**J1b. The clean coat's colour drifts, not only its value**
+
+- Measure: std of C* band-passed at 10 cm-2 m on each plane's clean albedo (painted walls)
+- Pass: 0.3-1.2 on every plane
+- Origin: U (round I: 'more variety in saturation'); L (docs/redesign/research/surface-detail-techniques.md §7: the clean coat varied in value only; concrete is never a monotone block colour, hue drift 1-3 deg at C* 1-4); C
+
+**J3. Concrete has voids, aggregate shadows and its own chroma**
+
+- Measure: the texture stage's concrete (wx_concrete tiles at 1 mm/px): the cast face's void share, voids per m2 from 5 mm and from 10 mm, the largest; aggregate shadows (1 L* or more darker than their surroundings, voids left out); the clean concrete's C* median and p10-p90 spread; through the spray coat: open voids under 2 mm and dimples from 5 mm per m2
+- Pass: voids 0.3-2 %; 30-150 per m2 from 5 mm and 5-40 from 10 mm; the largest <= 25 mm; shadows 2-8 %; C* median <= 4 with spread >= 1.5; the coat: no open voids under 2 mm and 2-60 dimples per m2 from 5 mm
+- Origin: U (round I: 'Small spots of unevenly mixed concrete, or flecks even, of darker cooler areas or pebbles embedded in it. Very faint but noticeable ... look into pitting ... small pits like 1cm wide'); L (docs/redesign/research/coatings-concrete-corrosion.md §1: JCI 2019 test panels 1.25-1.82 % voids, up to 6.5 mm deep; ACI: bugholes up to 25 mm, mostly 15 mm or less; aggregate transparency spots 5-25 mm; filler and spray tile hide voids under 3 mm); C (counts, shadow cover)
 
 ## Revisions
 
@@ -637,6 +721,27 @@ Each change to a rule after it was first written, with the evidence for it.
 - **R1, R2, R3 (railing steel; panels)**: R1 and R2 count the railing steel R1 always named (rails, posts); flat steel panels are their own class, and R3 adds a clause for them: their rust sits in each panel's bottom quarter. Round I builds: the north front's steel is 74 % flat panels (the units' steel doors and pipe-shaft doors under the corridor slab), which held about half of all rust when every plane had to reach the same share. The generator now runs one rust clock for the building: sheltered doors rust 0.5-5 % while the south rails reach the grade (research weathering-rust-water §1: exposure and time of wetness decide).
 - **T2 (text)**: the text now names the measure the gate and the large-scale-texturing skill use: the correlation coefficient's excess over its ring median, at most 0.15 (the text read 'over the median ... <= 1.5'). The text and the check disagreed; the check is the stricter reading (a ratio of 1.5 would let a visible repeat through), so the text follows the check.
 - **T2, T3 (north window)**: the north front's open-wall check window moved to plain wall (x 2580-2780, y 730-930 at 50 px/m, 99.99 % wall). The old window (x 1260-1460, y 400-600) was 21 % windows, a downpipe and meter boxes repeating every storey; their spacing scored as a tile period (New: 0.16 at the coat detail's 0.6 m, 0.18 at the stain tile's 2.05 m, while the south front's plain window scored 0.001-0.012), against the rule's 'open wall'.
+- **P1, P2, R7, R8, R9, F5, G7, J1b, J3**: new rules (round J). The user's round-I notes on rust, concrete, coatings and Derelict's top edge, corners and recesses; bands from the research round (docs/redesign/research/coatings-concrete-corrosion.md, docs/redesign/research/surface-detail-techniques.md), estimates tagged C.
+- **P1**: the research draft's third clause (>= 70 % of flaking near cracked or blistered coat) left out. The generator draws the checked film around its own flakes, so the clause would hold by construction; where the flaking sits is P2's measure.
+- **P2**: the splash zone at the foot (0-0.5 m) added to the draft's zones; the soffit clause dropped. Rising damp at the foot is the classic cause of paint failure on masonry and the generator puts flaking there; the planes' paint mask holds no soffits.
+- **R7**: the draft's 'rust at defects >= 85 %' clause not adopted at 50 px/m. Railing members are 1-2 px wide at 50 px/m, so every steel pixel lies within 2 cm of an arris; the rims are measured at 1 mm/px instead.
+- **R3**: its cap on rust on other upright faces counts corrosion only. The runs down the uprights (R8) are their own layer (rust_run), so the cap no longer blocks the vertical streaks the user asked for (research docs/redesign/research/coatings-concrete-corrosion.md §3).
+- **L5**: recorded: adopted at streak area x 1.15 and the ground band +5 cm, weaker than the water-layers note's V4 (x 1.3, +0.1 m). The round-I presets passed the user's review at this strength ('Yes, both grow'); the audit (research-to-practice-audit.md rank 6) found no record of the choice.
+- **H6**: recorded: adopted at 0.3 m and 40 %, weaker than the note's V3 (0.15 m, 50-70 %). No reason was recorded in round I; the user's round-I review raised no issue with where streaks run. Kept, pending a pick; the audit asked for the record.
+- **I5**: recorded: 8 % may go back, against the note's 2 %. No reason was recorded in round I; kept pending a pick, recorded at the audit's request.
+- **A1**: recorded: Derelict T2+ 0.50 and T3+ 0.28, against the note's 0.60 and 0.32; Kept T5+ up to 1 %, against 0.3 %. The user's round-I Derelict note asked for more at the top edge, top corners, corners and recesses, which F5 and G7 now carry, not for an overall raise; the bands stay pending a pick, recorded at the audit's request.
+- **all**: the 22 citations of roundG/research/*.md (a scratchpad path) now name the repo files docs/redesign/research/weathering-*.md. The audit (research-to-practice-audit.md rank 28): a citation must resolve in the repo.
+- **G7**: the corner ratio is measured only where the strip and the far wall each cover 1 m2 or more on a plane (was 50 px, 0.02 m2). Round J test builds: the W gable's only inside corner is the side of a 0.1 m recess beside a pipe chase, measured on 144 px (0.06 m2) of strip in rows 300-450; its ratio read 0.87 at Worn and 1.07 at Derelict, noise from one stretch of wall. The fronts measure 29-46 m2 of strip each and are unchanged.
+- **P3**: at 1 mm/px, type-a flakes are compared with the paint 3-8 mm out from the flake, past the 1.5 mm lip (was 0-4 mm). Round J test (J13 Derelict): the 0-4 mm ring held the lip, the broken edge's clean body that the renderer brightens by 6 % as P3's own lip feature, so the check compared the older coat with the lip rather than with the weathered coat round it (type-a dL read -2.2).
+- **T0, P3**: added to the rulebook as written texture-check rules (they already bound builds through wx_texcheck). A rule that binds must be in the rulebook the review page and weathering-rules.md show.
+- **G7**: recess bottoms are the bottom 0.3 m of a recess face above its floor line (was: the 0.3 m above any wall pixel with a nearer surface below it), in the gate and the generator alike. Round J tests: a nearer surface below is usually a parapet hiding the wall, not the junction where water stands; on Worn's north front 16,969 of 27,292 severe-growth pixels sat along the walkway parapet lines (L* p25 51.3), a band of growth the wall does not have there.
+- **P3**: the ramp is the mean 0.9-0.1 width, pixels between 0.1 and 0.9 per outline pixel (was 0.8 over the median central-difference gradient). One partial pixel between full values gives a central difference of 0.5, so any anti-aliased step read 1.6 px and no crisp edge could meet 1.5 px: round J's edge widths 0.10, 0.05 and 0.02 all read 1.6.
+- **P3**: type a also passes as a hue step away (a*b* 2 or more apart, L* within 10). The research's own clause (docs/redesign/research/coatings-concrete-corrosion.md §2: an older coat 2-10 L* lighter, or a hue step away); the check had dropped the alternative. The danchi's older coat is now a pale cream under the white.
+- **R7**: on a rust sweep entry (rust overridden on Typical) the share band does not bind; the placement clause does. The bands are per preset, and a sweep entry is a Typical build whose rust the control sets (0-1.0), so Typical's 0.5 % cap would reject every step above it; the amount budgets A0, A1 and B1 are set aside for every sweep for the same reason.
+- **D_local (A1, A2, A3, B1, B2, D1, E1)**: the peeling layer's pixels are left out, as the edge layer's are (P1-P3 measure them); in the gate and in the solver's coverage alike, for every preset. Round J's first Derelict build failed A1 alone, T6+ 0.045 against 0.040; the peeling layer touched 28 % of its T6+ blocks. Exposed concrete (L* 64) under the white coat reads D_local about 0.5, T6 by its darkness (T6 is defined as a black crust), and P1's ISO 4628-5 amounts put 0.9-9 % of Derelict's wall there (3-15 % flaked, 30-60 % of it concrete) against A1's T6+ cap of 4 %, so the two rules counted the same pixels and could not both pass at P1's upper end. A1's bands were set on the user's picks in rounds F-I, with the peeling layer off (on from round J). Left out, the same build reads T2+..T6+ 0.716 / 0.398 / 0.189 / 0.085 / 0.036 (0.719 / 0.402 / 0.192 / 0.086 / 0.037 leaving out only pixels at least half flake). A flake lighter than the clean coat no longer moves the reference either (round J's type-a trap).
+- **R8**: measured from the joint's lower end, over 1-2 px holes in the steel mask inside the member; joints with under 5 cm of upright below them left out. Pipeline 98 rejected rust 0.75 and 1.0 on R8 (median 0.12 and 0.26 m, runs below 76 and 79 % of joints). At rust 1.0, of the 1,002 rusted top joints counted as having no 5 cm run, 410 stopped on the joint's own unrusted lower pixels (a run of 0) and 530 on a 1-2 px hole in the captured steel inside the upright (the weld; the generator's run flows through it); 47 hang over a stub. With the run measured as the rule text says, the same generator reads rust 0.5 / 0.614 / 0.75 / 1.0: below 0.79 / 0.92 / 0.98 / 1.00, median 0.08 / 0.12 / 0.20 / 0.48 m, stained 0.059 / 0.107 / 0.210 / 0.575 (unchanged), emulated from the real planes (_emu_r8.py; it reproduces the gate's old numbers to 1-5 joints).
+- **R7 (close-up rims)**: the perimeter counted only where a patch borders painted steel; patches with under 1 cm of such edge left out. Heavy rust spans whole members, so most of a patch's edge is the member's outline against the wall, where no rim can form: 29 / 26 / 20 % of the edge borders paint at rust 0.5 / 0.75 / 1.0 (33 % at Derelict). On the painted edge the rims are there at 0.5, 0.75 and Derelict (patches with a rim 1.00 / 0.90 / 1.00, against 0.73 / 0.45 / 0.59 on the whole edge) and missing at 1.0 (0.32 against 0.04): rust 1.0 still fails.
+- **texture checks (T0-T3, P3, R7c)**: run on the Karma crop captures where they exist, as the review renders are. The pipeline ran them on the 50 px/m geometry upsampled, while the page shows the captures; T0-T3 and P3 read the same either way (Typical and Derelict compared), R7c moved (Derelict 0.62 -> 0.59, rust 0.75 0.50 -> 0.45 on the whole edge).
 
 ## Running the gate
 

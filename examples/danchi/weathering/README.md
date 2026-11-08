@@ -35,6 +35,9 @@ python -I pipeline_g.py <tag> [N]       # round G: presets, then the six sweeps 
 python -I pipeline_h.py <tag> [N]       # round H: presets with matched seeds, then six sweeps (rust its own; no damage)
 python -I pipeline_i.py <tag> [N]       # round I: presets, then the rust, streak and growth sweeps
 python -I render_review.py <jobs.json>  # review images: the engine-mirror composite or the 50 px/m sheet of a build
+python -I pipeline_j.py <tag> [N]       # round J: as round I, and every build's texture checks (batch_j.py) must pass too
+python -I ../../../scripts/weathering/weather_gate.py texture <out_dir> --json <out_dir>/texcheck.json   # T0-T3, P3, R7c
+python -I render_player_j.py <out_dir> <dir> [view ...]   # player views at 1:1: 1 m on 4K, 2 m and 8 m on 1080p
 ```
 
 Run them from this folder. Builds go to `$WX_OUT` (default `./builds`, not committed); use the gains
@@ -52,6 +55,18 @@ places). `real_planes.py` turns the captures into planes with their features: to
 corner heads, fixings, shelter, flow starts at depth steps, and the construction joints on the
 solid walls. `run_proto.py` holds the build loop and the stand-in planes (`facade_synth.py`) used
 for fast iteration.
+
+## Accepted builds, round J
+
+Rulebook 1.7 (round J), 89 rules. New this round: paint failure in the ISO 4628-5 amounts (P1-P3), rust down the uprights, dark and bright rust and bare metal (R7-R9), Derelict's top band and corners (F5), inside corners and recess faces (G7), coat chroma (J1b), concrete voids, flecks and pits (J3) and on-screen magnification (T0). Accepted presets: New, Kept, Typical, Worn, Derelict (pipeline 98, every one through the gate and the texture checks). After the pipeline, three measures were corrected without changing the generator (R8 measures each run from the joint's lower end over 1-2 px holes in the captured steel; R7c counts rims on the edge that borders painted steel; the texture checks read the crop captures), and every build was re-gated rather than rebuilt; the revisions carry the numbers.
+
+At Typical's solved gains (1.9599,1.3406,0.6229):
+
+| Control | Accepted steps | Rejected steps | Series |
+|---|---|---|---|
+| rust | 0.25, 0.5, 0.75 | 0 (series R4 on the first step from no rust: R3's onset puts rust on the top rail's upper face, which R4's first step cannot count; a rule question); 1.0 (R7c: heavy rust lacks rims where it meets paint) | accepted |
+| streaks | 0 | 0.25 (H4); 0.5 (G5); 0.75 (D1, E1, G5, T3); 1.0 (C3, D1, H1, G6, H6, G7, T3) | failed L4 |
+| growth | 0.25 | 0 (B2); 0.5 (G5, M3); 0.75 (E1, G5); 1.0 (B2, C3, E1, F1, G4, G5, M1) | one step |
 
 ## Accepted builds, round I
 

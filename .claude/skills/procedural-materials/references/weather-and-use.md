@@ -143,7 +143,10 @@ arrises and corners. A chip or recess is an edge too, and inherits every rule be
 
   Peeling grows inward from edges and water sources.
 - **Cracks start at re-entrant corners of openings:** about one per 2–4 openings, running 30–60°
-  off the corner bisector, 0.3–1.5 m long and tapering *(est.)*. No crack starts mid-face.
+  off the corner bisector, 0.3–1.5 m long and tapering *(est.)*. Solid walls crack mid-panel too:
+  restrained drying shrinkage gives near-vertical cracks 0.8–1.0 of the storey height long and
+  2.8–3.6 m apart (about 2 per 6 m bay), widest at 0.4–0.6 of the lift; they start as short pieces
+  that join (`docs/redesign/research/weathering-structural-damage.md`).
   Crazing (hexagons of 40 mm or less) appears on smooth tops only.
 
 ## Painted steel: water decides where it fails
@@ -199,7 +202,10 @@ to be worked into the realistic baseline (review 34).
   level ledges, and is cleared within 2–5 cm of a rain-exposed outer edge.
 - **Debris** collects in inside corners. Droppings land 0.1–0.5 m below about 1 in 5 perches:
   rail tops, ledges, sign tops.
-- **Moss and lichen** grow only on damp, shaded tops and at drip landings.
+- **Moss** grows in joints, on damp ledges and parapet tops, at drip landings and at wall feet
+  (cushions 5–20 mm after 8–15 years). **Lichen** rosettes (1–5 cm, grey-green, orange or black)
+  come after a lag of years on copings, bare concrete and sunnier faces sheltered from run-off
+  (`docs/redesign/research/weathering-organic-growth.md`).
 
 ## Exposure weight per edge *(est.)*
 

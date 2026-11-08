@@ -1,6 +1,7 @@
-"""wx_texcheck.py - the texture stage's rules (round I) on a build's fine composites:
-T1 detail at game texel density, T2 no tile period shows, T3 the fine composite keeps the coarse
-amounts. Called by weather_gate.py texture <build> (or directly).
+"""wx_texcheck.py - the texture stage's rules on a build's fine composites: T0 (round J) the player's screen
+gets at most 2 screen pixels per texel of each detail carrier at its nearest approach, T1 detail at game
+texel density, T2 no tile period shows, T3 the fine composite keeps the coarse amounts; and the close-up
+parts of P3 (flakes) and R7 (rims round rust). Called by weather_gate.py texture <build> (or directly).
 
 python -I wx_texcheck.py <build_dir> [--json out.json]
 """
@@ -19,6 +20,19 @@ WINDOWS = {"S_front": {"open": (1260, 400, 1460, 600), "close": (1323, 380, 1423
                                                              # a pipe and meter boxes repeating every storey)
            "W_gable": {"open": (200, 900, 500, 1200)}}
 T1C = {"detail_ppm": 1000.0, "coat_ppm": 1000.0}
+# round J (research art-review-and-qa.md 6.1-6.2): screen px per metre at a player's camera,
+# p = W / (2 tan(HFOV / 2) d), UE's 90 deg horizontal FOV on a 3,840 px (4K) screen; the danchi's
+# metrics sheet: nearest approach per surface class (walls and railings 1.0 m: a player at the wall,
+# the far end of the research's walkway range; entrances and stair cores at 0.5 m are not in these
+# planes). Detail carriers fail above 2 screen px per texel; the 50 px/m masks may exceed it because the
+# detail reveals their edges (the edge rule).
+T0C = {"screen_px": 3840, "hfov_deg": 90.0, "d_min": {"wall": 1.0, "rail": 1.0}, "max_m": 2.0,
+       "report_d": (0.5, 1.0, 2.0, 5.0, 20.0)}
+P3C = {"window": ("S_front", (1700, 1696, 1800, 1786), 1000.0), "ramp_px": 1.5, "b_L": (55.0, 68.0), "b_C": 4.0,
+       "a_dL": (2.0, 10.0), "a_dab": 2.0, "size_mm": {"worn": (3.0, 30.0), "derelict": (10.0, 1e9)}}
+R7CC = {"window": ("S_front", (1800, 1275, 1940, 1355), 1000.0), "patch_mm": 20.0, "rim_px": 2, "rim_share": 0.30,
+        "edge_mm": 10.0,                                      # J28: patches with under 1 cm of edge on painted steel are left out
+        "patches_share": 0.50}
 T2C = {"ppm": 200.0, "max_excess": 0.15}
 T3C = {"mean": 0.03, "p05": 0.85, "p95": 1.15, "erode_px": 1}
 
@@ -120,10 +134,145 @@ def check_mean_eroded(res_, d, plane):
             "p95": round(float(np.percentile(r, 95)), 4), "px": int(core.sum())}
 
 
+def screen_ppm(d_m):
+    return T0C["screen_px"] / (2.0 * np.tan(np.radians(T0C["hfov_deg"]) / 2.0) * d_m)
+
+
+def rule_T0():
+    """T0 (round J): magnification m = screen px per metre at the nearest approach / the carrier's px per
+    metre, for every detail carrier; fail above 2. The masks are reported, not judged (edge rule)."""
+    car = {}
+    for name in sorted({v[1] for v in wh.REFINE.values() if v[1]}):
+        t = wh.tile(name)
+        car[name] = t.u.shape[1] / t.w_m
+    C = wh.coat()
+    car["coat_detail"] = C["detail"].shape[1] / C["det_m"]
+    import wx_concrete as wc
+    car["concrete"] = wc.N / wc.TILE_M
+    d0 = T0C["d_min"]["wall"]
+    m = {k: round(screen_ppm(d0) / v, 2) for k, v in car.items()}
+    rep = {}
+    for d_ in T0C["report_d"]:
+        rep["%g m" % d_] = {"screen_px_m": round(screen_ppm(d_), 1), "detail_1000": round(screen_ppm(d_) / 1000.0, 2),
+                            "mask_50": round(screen_ppm(d_) / 50.0, 1)}
+    bad = [k for k, v in m.items() if v > T0C["max_m"]]
+    return res("T0", not bad, {"d_min_m": d0, "magnification": m, "by_distance": rep},
+               ("over %g at %g m: %s" % (T0C["max_m"], d0, bad)) if bad else "")
+
+
+def _lab(A):
+    import weather_measure as wm
+    return wm.linear_to_lab(np.clip(A, 0, 1).astype(np.float64))
+
+
+def rule_P3c(d, planes, preset):
+    """P3 at 1 mm/px: flake outlines crisp (the 0.9-0.1 ramp <= 1.5 px), typical flake size by preset (ISO
+    4628-5 size classes: Worn 3-30 mm, Derelict 10 mm and up), type-b flakes show concrete (L* 55-68,
+    C* <= 4), type-a flakes an older coat 2-10 L* lighter than the paint round them."""
+    plane, box, ppm = P3C["window"]
+    early = preset in ("new", "kept", "typical")
+    if plane not in planes:
+        return res("P3", None, None, "no window plane")
+    r = wh.compose(d, plane, box, ppm)
+    ex = r.get("extra") or {}
+    if "peel_a" not in ex:
+        return res("P3", True if early else None, None, "no flakes in the window")
+    a, pk, b = ex["peel_a"], ex["peel_pk"], ex["peel_b"]
+    mrel = np.clip(a / np.maximum(pk, 1e-6), 0, 1)
+    core = mrel > 0.9
+    if core.sum() < 30:
+        return res("P3", True if early else None, {"flake_px": int(core.sum())}, "too few flake pixels")
+    bm = mrel > 0.5                                      # J21: the mean 0.9-0.1 width, partial px per outline px
+    per = bm & ~(np.roll(bm, 1, 0) & np.roll(bm, -1, 0) & np.roll(bm, 1, 1) & np.roll(bm, -1, 1))
+    tr = (mrel > 0.1) & (mrel < 0.9)
+    ramp = float(tr.sum()) / max(float(per.sum()), 1.0)
+    import weather_measure as wm
+    lab_, n = wm.label(mrel > 0.5)
+    sizes = np.bincount(lab_.ravel())[1:]
+    dmm = 2 * np.sqrt(sizes / np.pi) * 1000.0 / ppm
+    typ = float(np.sum(dmm * sizes) / max(np.sum(sizes), 1))          # area-weighted mean size (mm)
+    L = _lab(r["albedo"])
+    C = np.hypot(L[..., 1], L[..., 2])
+    tb = core & (b > 0.5)
+    ta = core & (b < 0.5)
+    def _grow(m_, rr_):
+        o_ = m_.copy()
+        for dy in range(-rr_, rr_ + 1):
+            for dx in range(-rr_, rr_ + 1):
+                if dy * dy + dx * dx <= rr_ * rr_:
+                    o_ |= np.roll(np.roll(m_, dy, 0), dx, 1)
+        return o_
+    fl_ = mrel > 0.5                                   # J16: the paint 3-8 mm out, past the 1.5 mm lip
+    ring = _grow(fl_, max(3, int(0.008 * ppm))) & ~_grow(fl_, max(2, int(0.003 * ppm)))
+    ring &= ~(mrel > 0.1) & np.isin(r["cls"], (1, 2))
+    v = {"ramp_px": round(ramp, 2), "flakes": int(n), "typical_mm": round(typ, 1),
+         "largest_mm": round(float(dmm.max()) if dmm.size else 0.0, 1)}
+    oks = [ramp <= P3C["ramp_px"]]
+    if tb.sum() >= 30:
+        v["type_b_L"] = round(float(np.median(L[..., 0][tb])), 1)
+        v["type_b_C"] = round(float(np.median(C[tb])), 2)
+        oks += [P3C["b_L"][0] <= v["type_b_L"] <= P3C["b_L"][1], v["type_b_C"] <= P3C["b_C"]]
+    if ta.sum() >= 30 and ring.sum() >= 30:              # J21: 2-10 L* lighter, or a hue step away
+        dL = float(np.median(L[..., 0][ta]) - np.median(L[..., 0][ring]))
+        dab = float(np.hypot(np.median(L[..., 1][ta]) - np.median(L[..., 1][ring]),
+                             np.median(L[..., 2][ta]) - np.median(L[..., 2][ring])))
+        v["type_a_dL"], v["type_a_dab"] = round(dL, 1), round(dab, 1)
+        oks.append(P3C["a_dL"][0] <= dL <= P3C["a_dL"][1] or (abs(dL) <= P3C["a_dL"][1] and dab >= P3C["a_dab"]))
+    sb = P3C["size_mm"].get(preset)
+    if sb is not None:
+        oks.append(sb[0] <= typ <= sb[1])
+    return res("P3", all(oks), v)
+
+
+def rule_R7c(d, planes, rust_amount):
+    """R7 at 1 mm/px: from rust 0.5, >= 50 % of rust patches of 2 cm or more have exposed metal or lifted
+    paint on >= 30 % of their perimeter."""
+    if rust_amount < 0.5 - 1e-6:
+        return res("R7c", True, {"rust": rust_amount}, "applies from rust 0.5")
+    plane, box, ppm = R7CC["window"]
+    if plane not in planes:
+        return res("R7c", None, None, "no window plane")
+    r = wh.compose(d, plane, box, ppm)
+    ex = r.get("extra") or {}
+    if "rust_a" not in ex:
+        return res("R7c", None, None, "no rust anatomy in the window")
+    import weather_measure as wm
+    core = ex["rust_a"] > 0.12
+    rim = ex["rim"]
+    lab_, n = wm.label(core)
+    if n == 0:
+        return res("R7c", None, None, "no rust")
+    sizes = np.bincount(lab_.ravel())
+    min_px = np.pi * (0.5 * R7CC["patch_mm"] * ppm / 1000.0) ** 2
+    er = core & np.roll(core, 1, 0) & np.roll(core, -1, 0) & np.roll(core, 1, 1) & np.roll(core, -1, 1)
+    edge = core & ~er
+    near = rim.copy()
+    for _ in range(R7CC["rim_px"]):
+        near = near | np.roll(near, 1, 0) | np.roll(near, -1, 0) | np.roll(near, 1, 1) | np.roll(near, -1, 1)
+    st_ = ex.get("steel")                                  # J28: the perimeter where it borders painted steel
+    paint = (st_ & ~core) if st_ is not None else ~core
+    pn = paint | np.roll(paint, 1, 0) | np.roll(paint, -1, 0) | np.roll(paint, 1, 1) | np.roll(paint, -1, 1)
+    edge = edge & pn
+    tot = np.bincount(lab_[edge], minlength=n + 1)
+    hit = np.bincount(lab_[edge & near], minlength=n + 1)
+    min_edge = R7CC["edge_mm"] * ppm / 1000.0
+    big = [i for i in range(1, n + 1) if sizes[i] >= min_px and tot[i] >= min_edge]
+    if not big:
+        return res("R7c", None, {"patches": 0}, "no rust patch of 2 cm or more in the window")
+    shares = [hit[i] / tot[i] for i in big]
+    ok_share = float(np.mean([s_ >= R7CC["rim_share"] for s_ in shares]))
+    return res("R7c", ok_share >= R7CC["patches_share"], {"patches": len(big), "with_rim": round(ok_share, 3),
+                                                         "median_rim_share": round(float(np.median(shares)), 3)})
+
+
 def check(d):
     meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
     planes = set(meta["planes"])
-    return [rule_T1(), rule_T2(d, planes), rule_T3(d, planes)]
+    cfg = meta.get("config", {})
+    ov = cfg.get("override") or {}
+    rust = float(ov.get("rust", (meta.get("amounts") or {}).get("rust", 0)) or 0)
+    return [rule_T0(), rule_T1(), rule_T2(d, planes), rule_T3(d, planes),
+            rule_P3c(d, planes, str(cfg.get("preset") or "")), rule_R7c(d, planes, rust)]
 
 
 if __name__ == "__main__":

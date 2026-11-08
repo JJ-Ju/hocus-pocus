@@ -68,6 +68,30 @@ def lab_to_lin(lab):
 
 
 C_FRESH, C_MID, C_OLD, C_WET = (lab_to_lin(c) for c in (LAB_FRESH, LAB_MID, LAB_OLD, LAB_WET))
+# round J: runs down the uprights, colour variation, bare steel (each switchable)
+RUNUP = True                   # rust carried down the bars by the water (J15: on by default)
+RUNUP_L = (0.12, 0.55)         # decay length a0 + a1 x amount (m), per bar x exp(RUNUP_VAR x N) (before J9)
+RUNUP_LEXP = (0.05, 5.4)       # J9: decay length L0 x G^((a - 0.5) / 0.5): 0.05 / 0.12 / 0.27 m at 0.5 / 0.75 / 1.0
+RUNUP_COLLAR = (0.05, 0.6)     # J9: the film pools above the bottom rail: reach (m) and opacity x the run's source
+RUNUP_VAR = 0.60                # round J2: more spread between bars (some reach the bottom rail)
+RUNUP_OP = (0.25, 0.40)        # opacity at the source a0 + a1 x its rust age (J2: streaks, not a tint)
+RUNUP_STREAK = 0.30            # streaky along the bar
+COLOUR_VAR = True              # dark intense patches and bright fresh wet rust (J15: on by default)
+VAR_AGE, VAR_SCALE_M = 0.50, 0.05     # age offset amplitude, patch scale (m)
+LAB_RUN_HEAD, LAB_RUN_TAIL = (50.0, 22.0, 40.0), (66.0, 14.0, 34.0)   # J4: a thin iron-oxide film over white: orange (hue 61-68 deg, C* 36-46)
+LAB_DARK = (25.0, 10.0, 11.0)         # J2: thick old scale, dark brown-black (darker than LAB_WET's hue)
+DARK_K = 0.90                         # its weight where the age offset is high on old rust (J12: R9)
+DARK_WET, DARK_WET_SCALE_M = 1.0, 0.03    # J13: dark scale in patches at feet, joints, the bottom rail, rail tops
+DARK_WET_NV = (-2.5, -1.5)            # J17-J22: most wet-part rust (J14's (-1.0, 0.0) gave R9 dark 13.8 %)
+DARK_OPAQUE = True                    # J13: thick old scale hides the paint (opacity toward 1 where dark)
+LAB_BRIGHT = (56.0, 24.0, 40.0)       # fresh wet rust: brighter, more chroma (hue ~59 deg)
+BRIGHT_K, BRIGHT_SCALE_M = 1.0, 0.03     # J18: 0.8 gave R9 bright 7.2 % once dark grew
+BARE = True                    # bare steel where the paint flaked (J15: on by default)
+BARE_HALO = (0.0, 0.50)        # the ring around the rust: alpha a0 + a1 x amount (2 cm pixels, partly bare; J25)
+CHIP_P = (0.0, 0.006)           # chips: per-pixel chance on steel a0 + a1 x amount, x3 on top-rail tops and joints (J25)
+LAB_BARE = (55.0, 0.0, 2.5)    # bare steel: dull grey, a trace of flash rust (J2: 60 read as paint)
+C_BRIGHT, C_BARE, C_DARK = lab_to_lin(LAB_BRIGHT), lab_to_lin(LAB_BARE), lab_to_lin(LAB_DARK)
+C_RUN_HEAD, C_RUN_TAIL = lab_to_lin(LAB_RUN_HEAD), lab_to_lin(LAB_RUN_TAIL)
 C_HEAD, C_TAIL = lab_to_lin(LAB_HEAD), lab_to_lin(LAB_TAIL)
 
 
@@ -520,6 +544,78 @@ def layer(plane, metal, a, share, key, pre=None, Ts=None):
     ra = ra * np.where(front < 1, np.clip(0.55 + 0.45 * front + 0.35 * sp, 0.2, 1.0), 1.0)
     acc = np.where(rust, np.clip(ra, 0, 0.92), 0).astype(F32)
     col = np.where(rust[..., None], rust_colour(u, w), 0).astype(F32)
+    M = S["M"]
+    if COLOUR_VAR:                                      # round J: dark intense patches, bright fresh wet rust
+        nv = nz.gfield((H, W), VAR_SCALE_M * ppm + 0.5, key + ("rvar",))
+        nb = nz.gfield((H, W), BRIGHT_SCALE_M * ppm + 0.5, key + ("rbri",))
+        uv = np.clip(u + VAR_AGE * nv, 0, 1).astype(F32)
+        cv = rust_colour(uv, w)
+        wet_ = 0.5 + 0.5 * nz.smoothstep(0.8, 2.0, w)
+        bright = (BRIGHT_K * nz.smoothstep(0.0, 1.0, nb) * (1.0 - nz.smoothstep(0.25, 0.75, uv)) * wet_)[..., None]
+        cv = cv + (C_BRIGHT - cv) * bright
+        dark = (DARK_K * nz.smoothstep(-0.6, 0.4, nv) * nz.smoothstep(0.25, 0.55, uv))[..., None]   # J2, J3, J12, J20, J22
+        if DARK_WET > 0:                                # J13: water stays at feet, joints, bottom rail, rail tops
+            wetp = (M["foot"] | M["joint"] | M["bottom"] | (M["rail"] & M["upper"])).astype(F32)
+            nd = nz.gfield((H, W), DARK_WET_SCALE_M * ppm + 0.5, key + ("rdkw",))
+            dw = DARK_WET * wetp * nz.smoothstep(DARK_WET_NV[0], DARK_WET_NV[1], nd) * nz.smoothstep(0.05, 0.25, uv)
+            dark = np.maximum(dark, dw[..., None])
+        dark = dark * (1.0 - bright / max(BRIGHT_K, 1e-6))        # J18: dark old scale does not cover fresh fronts
+        cv = cv + (C_DARK - cv) * dark
+        if DARK_OPAQUE:
+            acc = np.where(rust, acc + (1.0 - acc) * dark[..., 0], acc).astype(F32)
+        col = np.where(rust[..., None], cv, 0).astype(F32)
+    S["run_a"], S["run_c"] = np.zeros((H, W), F32), np.zeros((H, W, 3), F32)
+    if RUNUP and a > 0:                                 # round J: rust carried down the bars by the water
+        updn = M["upright"] | M["joint"]
+        path = updn | M["rail"]                         # through rail crossings
+        src = np.where(rust & updn, RUNUP_OP[0] + RUNUP_OP[1] * u, 0.0).astype(F32)
+        s_r = np.where(rust & M["rail"], RUNUP_OP[0] + RUNUP_OP[1] * u, 0.0).astype(F32)
+        src[1:] = np.maximum(src[1:], s_r[:-1] * updn[1:])          # from the rail into the bar below it
+        colf = np.exp(RUNUP_VAR * nz.gfield((8, W), 0.8, key + ("rufac",))[4]).astype(F32)
+        Lrun = RUNUP_LEXP[0] * RUNUP_LEXP[1] ** ((a - 0.5) / 0.5) if RUNUP_LEXP else RUNUP_L[0] + RUNUP_L[1] * a
+        dec = np.exp(-1.0 / np.maximum(Lrun * ppm * colf, 1.0)).astype(F32)
+        carry = np.zeros(W, F32)
+        dist = np.zeros(W, F32)
+        run_a = np.zeros((H, W), F32)
+        run_t = np.zeros((H, W), F32)
+        for y in range(H):
+            on = path[y]
+            cp = np.where(on, carry * dec, 0.0)
+            sy = src[y]
+            take = sy >= cp
+            carry = np.where(on, np.maximum(sy, cp), 0.0).astype(F32)
+            dist = np.where(take, 0.0, dist + 1.0 / ppm).astype(F32)
+            run_a[y] = np.where(updn[y], carry, 0.0)
+            run_t[y] = dist
+        streak = np.clip(1.0 + RUNUP_STREAK * nz.gfield((H, W), 0.08 * ppm + 0.5, key + ("rustr",)), 0.3, 1.6)
+        run_a = np.clip(run_a * streak, 0, 0.85).astype(F32)
+        if RUNUP_COLLAR and M.get("bottom") is not None:   # J9: a collar where the film pools on the bottom rail
+            bot = M["bottom"]
+            k_c = max(1, int(round(RUNUP_COLLAR[0] * ppm)))
+            near_bot = np.zeros((H, W), bool)
+            for s_ in range(1, k_c + 1):
+                near_bot[:-s_] |= bot[s_:]
+            has_run = (np.where(updn, run_a, 0.0) > 0.05).any(axis=0)       # a bar that carries a run
+            reach = near_bot & updn & has_run[None, :]
+            run_a = np.where(reach, np.maximum(run_a, RUNUP_COLLAR[1] * (RUNUP_OP[0] + RUNUP_OP[1] * 0.5)), run_a).astype(F32)
+        Lm_ = Lrun * colf[None, :]
+        tt = np.clip(run_t / np.maximum(0.6 * Lm_, 1e-3), 0, 1)[..., None]
+        S["run_a"] = run_a
+        S["run_c"] = (C_RUN_HEAD + (C_RUN_TAIL - C_RUN_HEAD) * tt).astype(F32)
+    S["bare_a"], S["bare_c"] = np.zeros((H, W), F32), np.broadcast_to(C_BARE.astype(F32), (H, W, 3))
+    if BARE and a > 0:                                  # round J: the paint flakes around the rust; chips
+        ring = np.zeros((H, W), bool)
+        ring[1:] |= rust[:-1]
+        ring[:-1] |= rust[1:]
+        ring[:, 1:] |= rust[:, :-1]
+        ring[:, :-1] |= rust[:, 1:]
+        ring &= metal & ~rust
+        rb = nz.rng(*key, "rbare")
+        expo = 1.0 + 2.0 * ((M["top"] & M["upper"]) | M["joint"])
+        chip = metal & ~rust & (rb.random((H, W)) < (CHIP_P[0] + CHIP_P[1] * a) * expo)
+        ba = np.where(ring, BARE_HALO[0] + BARE_HALO[1] * a, 0.0)
+        ba = np.maximum(ba, np.where(chip, rb.uniform(0.3, 0.7, (H, W)), 0.0))
+        S["bare_a"] = ba.astype(F32)
     # stains below the rusted feet (rule 9)
     M = S["M"]
     from weather_measure import label
