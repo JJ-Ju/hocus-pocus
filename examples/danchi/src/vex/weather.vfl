@@ -1,0 +1,170 @@
+// weather.vfl — detail wrangle on the plan ("weather_params"). Resolves the weathering
+// controls into one set of effective values (detail attributes w_*) that every layer reads:
+// decals, vertex colour bake, repaint patches, the damage variants and the dress.
+//
+// Macro controls: Age (years since construction), Upkeep, Years Since Repaint (auto from age
+// and upkeep, or set), Urban Grime, Weather Exposure, Prevailing Wind and Rain From, Weathering
+// Seed. A preset (New, Well Kept, Typical, Neglected) replaces Age and Upkeep and makes the
+// repaint automatic; Custom uses the sliders. Grime, exposure, wind and seed are the site's,
+// so presets leave them alone.
+//
+// Each detail control is "auto" (a function of the macro controls, below) unless its Override
+// toggle is on. Auto values are scaled by Auto Intensity (`weather`); overrides are not.
+
+function float pick(int ov; float autov; string parm) { return ov ? ch("../../" + parm) : autov; }
+
+string preset = chs("../../w_preset");
+float A = ch("../../w_age"), U = ch("../../w_upkeep");
+int rep_auto = chi("../../repaint_auto");
+float Rset = ch("../../age");
+if (preset == "new")            { A = 0;  U = 1.0;  rep_auto = 1; }
+else if (preset == "well_kept") { A = 15; U = 0.85; rep_auto = 1; }
+else if (preset == "typical")   { A = 35; U = 0.5;  rep_auto = 1; }
+else if (preset == "neglected") { A = 45; U = 0.12; rep_auto = 1; }
+float G = ch("../../w_grime"), X = ch("../../w_exposure");
+float wind = ch("../../w_wind");
+int wseed = chi("../../w_seed") + 7919 * chi("../../seed");
+float K = ch("../../weather");                       // auto intensity
+
+// ---- the building's history
+// repaint cycle: every ~7 years at full upkeep, ~24 at none; the building sits mid-cycle
+float R = rep_auto ? min(A, lerp(24.0, 7.0, U)) : min(Rset, A);
+// soiling clock: since the last repaint, plus a ghost of older stains bleeding through thin coats
+float Es = R + 0.22 * (A - R);
+float care = lerp(1.4, 0.7, U);                      // cleaning, gutters, sealant repairs
+float S = clamp((1 - exp(-Es / 14.0)) * care, 0, 1.25);          // soiling level
+float D = 1 - exp(-A * lerp(1.0, 0.4, U) / 30.0);                // concrete damage level
+float Ru = clamp((1 - exp(-(R + 0.5 * (A - R)) / 25.0)) * care, 0, 1.2);   // steel corrosion
+
+// ---- wind and driven rain per face (0 south/balconies +Z, 1 north/corridors -Z, 2 west gable
+// -X, 3 east gable +X). wind = compass bearing the wind comes from (0 N, 90 E, 180 S, 270 W).
+vector wd = set(sin(radians(wind)), 0, -cos(radians(wind)));
+vector fn[] = array({0, 0, 1}, {0, 0, -1}, {-1, 0, 0}, {1, 0, 0});
+float rain[], lee[];
+foreach (vector n; fn) {
+    float d = dot(n, wd);
+    append(rain, (1 - 0.6 * X) + 1.5 * X * max(0, d));    // sheltered 0.4..1, windward up to 1.9
+    append(lee, X * max(0, -d));
+}
+
+// ---- auto values (0-1 scale unless noted)
+float a_streak = clamp(S * (0.75 + 0.25 * X), 0, 1);
+float a_slen = 0.7 + 0.6 * X + 0.3 * S;                 // length multiplier
+float a_stail = 0.05 + 0.1 * X;                          // share of long (2-3 m) runs
+float a_swid = 1.0;
+float a_sint = 1.0;
+float a_scol = clamp(0.3 + 0.5 * S, 0, 1);               // colour variation
+float a_stop = 0.4 + 0.8 * X;                            // top-floor bias (+40 %..+120 % at the top)
+float a_stain = clamp(S * (0.5 + 0.5 * G) * 1.15 - 0.08, 0, 1);
+float a_sscale = 1.0;
+float a_soot = clamp(S * (0.3 + 0.9 * G), 0, 1);
+float a_corner = clamp(S * 1.1, 0, 1);
+float a_dmg = clamp(D, 0, 1);
+float a_dsize = lerp(0.03, 0.30, pow(a_dmg, 1.3));         // length of the largest break (m)
+int   a_dhot = A > 0 ? int(rint(1 + 2.5 * a_dmg)) : 0;
+float a_wear = A > 0 ? clamp(0.25 * S + 0.75 * D, 0, 1) : 0;
+float a_rust = clamp(Ru, 0, 1);
+int   a_patch = A > R + 0.5 ? int(rint(clamp(A / 12.0, 0, 4) * (0.3 + 0.7 * U))) : 0;
+float a_pcon = clamp(0.3 + 0.7 * S, 0, 1);
+float a_efflo = clamp(0.8 * pow(A / 45.0, 1.5) * (1.2 - 0.8 * U), 0, 1);
+float a_bio = clamp(0.9 * S * (1.3 - U), 0, 1);
+float a_splash = S > 0.01 ? clamp(0.2 + 0.8 * S, 0, 1) : 0;
+float a_splh = 0.3 + 0.4 * X;
+
+// auto intensity
+a_streak = clamp(a_streak * K, 0, 1); a_stain = clamp(a_stain * K, 0, 1); a_soot = clamp(a_soot * K, 0, 1);
+a_corner = clamp(a_corner * K, 0, 1); a_dmg = clamp(a_dmg * K, 0, 1); a_wear = clamp(a_wear * K, 0, 1);
+a_rust = clamp(a_rust * K, 0, 1); a_efflo = clamp(a_efflo * K, 0, 1); a_bio = clamp(a_bio * K, 0, 1);
+a_splash = clamp(a_splash * K, 0, 1);
+
+// ---- overrides
+int o;
+o = chi("../../ov_streak");
+float streak = pick(o, a_streak, "streak_amt"), sden = pick(o, 1.0, "streak_density");
+float slen = pick(o, a_slen, "streak_len"), stail = pick(o, a_stail, "streak_tail");
+float swid = pick(o, a_swid, "streak_width"), sint = pick(o, a_sint, "streak_int");
+float scol = pick(o, a_scol, "streak_colvar"), stop = pick(o, a_stop, "streak_top");
+o = chi("../../ov_stain");
+float stain = pick(o, a_stain, "stain_amt"), sscale = pick(o, a_sscale, "stain_scale");
+o = chi("../../ov_grime");
+float soot = pick(o, a_soot, "grime_amt"), corner = pick(o, a_corner, "grime_corner");
+o = chi("../../ov_dmg");
+float dmg = pick(o, a_dmg, "dmg_amt"), dsize = pick(o, a_dsize, "dmg_size");
+int dhot = o ? chi("../../dmg_hot") : a_dhot;
+if (!chi("../../damage")) dmg = 0;
+float wear = pick(chi("../../ov_wear"), a_wear, "wear_amt");
+float rust = pick(chi("../../ov_rust"), a_rust, "rust_amt");
+o = chi("../../ov_patch");
+int patches = o ? chi("../../patches") : a_patch;
+float pcon = pick(o, a_pcon, "patch_contrast");
+float efflo = pick(chi("../../ov_efflo"), a_efflo, "efflo_amt");
+float bio = pick(chi("../../ov_bio"), a_bio, "bio_amt");
+o = chi("../../ov_splash");
+float splash = pick(o, a_splash, "splash_amt"), splh = pick(o, a_splh, "splash_h");
+
+// ---- repaint patches: rectangles of bays x floors on the long facades, of grid cells on the
+// gables. Newer paint: cleaner and a slightly different tone (value off by 2-6 %).
+float bx[] = detail(0, "bay_x");
+int nb = len(bx), fl = detail(0, "floors");
+int pside[]; int pb0[]; int pb1[]; int pf0[]; int pf1[]; float pshade[];
+for (int k = 0; k < patches; k++) {
+    int pid = k * 13 + 5;
+    int sd = int(floor(hr(pid, 61, wseed) * 3.999));        // 0 S, 1 N, 2-3 gables
+    int b0, b1, f0, f1;
+    if (sd < 2) {
+        b0 = int(floor(hr(pid, 62, wseed) * nb));
+        b1 = min(nb - 1, b0 + int(floor(hr(pid, 63, wseed) * 2.999)));
+        f0 = int(floor(hr(pid, 64, wseed) * fl));
+        f1 = min(fl - 1, f0 + int(floor(hr(pid, 65, wseed) * 3.999)));
+    } else {
+        // gable: 1 m columns from the corridor line (0-10 on the 11 m end wall) x floors;
+        // a block 3-7 m wide and 2-5 floors high (the gable grid has lines at both)
+        b0 = int(floor(hr(pid, 62, wseed) * 8));
+        b1 = min(10, b0 + 2 + int(floor(hr(pid, 63, wseed) * 4.999)));
+        f0 = int(floor(hr(pid, 64, wseed) * max(1, fl - 2)));
+        f1 = min(fl, f0 + 2 + int(floor(hr(pid, 65, wseed) * 3.999)));
+    }
+    append(pside, sd); append(pb0, b0); append(pb1, b1); append(pf0, f0); append(pf1, f1);
+    append(pshade, (hr(pid, 66, wseed) < 0.5 ? -1 : 1) * hrange(pid, 67, wseed, 0.02, 0.06));
+}
+
+setdetailattrib(0, "w_age", A);
+setdetailattrib(0, "w_upkeep", U);
+setdetailattrib(0, "w_repaint", R);
+setdetailattrib(0, "w_soil", S);
+setdetailattrib(0, "w_damage", D);
+setdetailattrib(0, "w_grime", G);
+setdetailattrib(0, "w_exposure", X);
+setdetailattrib(0, "w_wind", wd);
+setdetailattrib(0, "w_rain", rain);
+setdetailattrib(0, "w_lee", lee);
+setdetailattrib(0, "w_seed", wseed);
+setdetailattrib(0, "w_streak", streak);
+setdetailattrib(0, "w_sden", sden);
+setdetailattrib(0, "w_slen", slen);
+setdetailattrib(0, "w_stail", stail);
+setdetailattrib(0, "w_swid", swid);
+setdetailattrib(0, "w_sint", sint);
+setdetailattrib(0, "w_scol", scol);
+setdetailattrib(0, "w_stop", stop);
+setdetailattrib(0, "w_stain", stain);
+setdetailattrib(0, "w_sscale", sscale);
+setdetailattrib(0, "w_soot", soot);
+setdetailattrib(0, "w_corner", corner);
+setdetailattrib(0, "w_dmg", dmg);
+setdetailattrib(0, "w_dsize", dsize);
+setdetailattrib(0, "w_dhot", dhot);
+setdetailattrib(0, "w_wear", wear);
+setdetailattrib(0, "w_rust", rust);
+setdetailattrib(0, "w_patches", patches);
+setdetailattrib(0, "w_pcon", pcon);
+setdetailattrib(0, "w_efflo", efflo);
+setdetailattrib(0, "w_bio", bio);
+setdetailattrib(0, "w_splash", splash);
+setdetailattrib(0, "w_splh", splh);
+setdetailattrib(0, "p_side", pside);
+setdetailattrib(0, "p_b0", pb0);
+setdetailattrib(0, "p_b1", pb1);
+setdetailattrib(0, "p_f0", pf0);
+setdetailattrib(0, "p_f1", pf1);
+setdetailattrib(0, "p_shade", pshade);

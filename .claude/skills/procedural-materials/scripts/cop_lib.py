@@ -60,9 +60,10 @@ def w(dst, idx, src, out=0):
     dst.setInput(idx, src, out)
 
 
-def normal_scale(relief_m, tile_m, exaggerate=2.0):
+def normal_scale(relief_m, tile_m, exaggerate=1.25):
     """heighttonormal scale for a 0-1 height map: relief depth / (tile width / 2), since a
-    Copernicus image is 2 units wide. Artists usually exaggerate by 1.5-3x."""
+    Copernicus image is 2 units wide. Keep the exaggeration at 1.0-1.5x: critiques name normals
+    that are too strong (docs/redesign/research/rE-concrete.md)."""
     return exaggerate * relief_m / (tile_m / 2.0)
 
 
@@ -153,7 +154,9 @@ def build_concrete_panels(parent="/img", name="concrete", res=2048, out_dir=None
     w(height, 0, h4)
     nrm, ao, curv = _derived(cn, height, relief_m, tile_m)
 
-    leak = mk(cn, "streakblur", "tie_leaks", dirtype="coord", dir=(0.0, -1.0), length=0.08)
+    # bias 1: one-sided; at the default 0 the leaks smear upward too
+    leak = mk(cn, "streakblur", "tie_leaks", dirtype="coord", dir=(0.0, -1.0), bias=1.0,
+              length=0.08)
     w(leak, 0, ties)
     gleak = mk(cn, "grunge_leakingstreaks", "leak_grunge", elementsize=0.4)
     stain = mk(cn, "blend", "stain", mode="max", mask=0.6)

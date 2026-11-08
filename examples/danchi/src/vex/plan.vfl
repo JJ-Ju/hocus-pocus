@@ -1,0 +1,146 @@
+// plan.vfl — detail wrangle, no input. Lays out the bay sequence along X and emits one point
+// per (bay, floor, side). Reads the asset parms two levels up.
+int seed    = chi("../../seed");
+int floors  = chi("../../floors");
+int units   = chi("../../units");
+float W     = ch("../../bay_w");
+float H     = ch("../../floor_h");
+int ncores  = chi("../../n_cores");      // 0 = auto
+int liftmode = chi("../../lift_mode");   // 0 auto, 1 never, 2 always
+
+if (chi("../../mass_from_seed")) {
+    floors = int(floor(hrange(seed, 901, 17, chi("../../floors_min"), chi("../../floors_max") + 0.999)));
+    units  = int(floor(hrange(seed, 902, 17, chi("../../units_min"), chi("../../units_max") + 0.999)));
+}
+floors = clamp(floors, 2, 16);
+units  = clamp(units, 2, 30);
+
+if (ncores <= 0) ncores = 1 + (units >= 10) + (units >= 18);
+int has_lift = (liftmode == 2) || (liftmode == 0 && floors >= 6);
+
+// core slots: core j sits after unit index slot[j]; jitter by one unit with the seed
+int slot[];
+for (int j = 0; j < ncores; j++) {
+    float f = (j + 1.0) / (ncores + 1.0);
+    int s = int(rint(f * units + (hr(seed, 300 + j, 5) - 0.5) * 1.6));
+    s = clamp(s, 1, units - 1);
+    if (j > 0 && s <= slot[j - 1]) s = slot[j - 1] + 1;
+    append(slot, min(s, units - 1));
+}
+
+// main core = the one closest to the middle; it carries the lift and the water tank
+int main_core = 0;
+float best = 1e9;
+for (int j = 0; j < ncores; j++) {
+    float d = abs(slot[j] - units * 0.5);
+    if (d < best) { best = d; main_core = j; }
+}
+
+// bay sequence
+int btype[];    // 0 unit, 1 stair core, 2 lift + stair core
+float bw[];
+int bunit[];    // unit index along the floor, -1 for cores
+int bcore[];    // core index, -1 for units
+int u = 0, c = 0;
+for (int k = 0; k < units + ncores; k++) {
+    if (c < ncores && u == slot[c]) {
+        int t = (c == main_core && has_lift) ? 2 : 1;
+        append(btype, t);
+        append(bw, t == 2 ? 5.5 : 3.0);
+        append(bunit, -1);
+        append(bcore, c);
+        c++;
+    } else {
+        append(btype, 0);
+        append(bw, W);
+        append(bunit, u);
+        append(bcore, -1);
+        u++;
+    }
+}
+int nb = len(btype);
+float L = 0;
+foreach (float w; bw) L += w;
+float x0 = -L * 0.5;
+
+float bx[];
+float acc = x0;
+for (int k = 0; k < nb; k++) {
+    append(bx, acc + bw[k] * 0.5);
+    acc += bw[k];
+}
+
+float ytop = PLINTH + floors * H;
+
+// per-unit-column "neglect" (1–2 columns in 5 are much worse), per-facade
+for (int k = 0; k < nb; k++) {
+    for (int f = 0; f < floors; f++) {
+        for (int side = 0; side < 2; side++) {
+            float z = side == 0 ? D_DEPTH * 0.5 : -D_DEPTH * 0.5;
+            vector p = set(bx[k], PLINTH + f * H, z);
+            vector4 q = side == 0 ? qy(0) : qy(180);
+            int pt = addpoint(0, p);
+            int sid = f * 1000 + k * 10 + side;
+            setpointattrib(0, "orient", pt, q);
+            setpointattrib(0, "id", pt, sid);
+            setpointattrib(0, "floor", pt, f);
+            setpointattrib(0, "bay", pt, k);
+            setpointattrib(0, "side", pt, side);
+            setpointattrib(0, "btype", pt, btype[k]);
+            setpointattrib(0, "bw", pt, bw[k]);
+            setpointattrib(0, "core", pt, bcore[k]);
+            int un = bunit[k];
+            setpointattrib(0, "ucol", pt, un);
+            int ukey = un >= 0 ? f * 100 + un : -1;
+            setpointattrib(0, "unit", pt, ukey);
+            // neighbours: is the next/previous bay (in +x) a unit?
+            int nxt = (k + 1 < nb) ? btype[k + 1] : -1;
+            int prv = (k > 0) ? btype[k - 1] : -1;
+            setpointattrib(0, "next_t", pt, nxt);
+            setpointattrib(0, "prev_t", pt, prv);
+            // persona per flat (shared by both sides): 0 tidy 1 family 2 gardener 3 elderly 4 vacant
+            int persona = -1;
+            if (un >= 0) {
+                float r = hr(ukey, 11, seed);
+                persona = r < 0.24 ? 0 : r < 0.56 ? 1 : r < 0.68 ? 2 : r < 0.93 ? 3 : 4;
+            }
+            setpointattrib(0, "persona", pt, persona);
+            string role = btype[k] == 0 ? (side == 0 ? "bal_bay" : "cor_bay") : (side == 0 ? "core_bal" : "core_cor");
+            setpointattrib(0, "role", pt, role);
+            // column neglect factor: per unit column and side
+            float colr = un >= 0 ? hr(un * 2 + side, 21, seed) : 0.5;
+            setpointattrib(0, "colneglect", pt, colr > 0.72 ? 1.0 : 0.25 + 0.25 * colr);
+        }
+    }
+}
+
+setdetailattrib(0, "floors", floors);
+setdetailattrib(0, "units", units);
+setdetailattrib(0, "ncores", ncores);
+setdetailattrib(0, "has_lift", has_lift);
+setdetailattrib(0, "main_core", main_core);
+setdetailattrib(0, "L", L);
+setdetailattrib(0, "x0", x0);
+setdetailattrib(0, "ytop", ytop);
+setdetailattrib(0, "H", H);
+setdetailattrib(0, "W", W);
+setdetailattrib(0, "bay_x", bx);
+setdetailattrib(0, "bay_w", bw);
+setdetailattrib(0, "bay_t", btype);
+setdetailattrib(0, "bay_core", bcore);
+
+// building number painted on the end walls: digits on most blocks, a hyphenated block code on
+// about a third (reference: 9 digits-only, 4 codes such as "A-43" of 13 legible numbers)
+int bn = chi("../../bldg_no");
+string numtext;
+if (bn > 0) numtext = itoa(bn);
+else {
+    float r = hr(seed, 950, 7);
+    int nn = 1 + int(floor(hr(seed, 951, 7) * 59.99));
+    string letters[] = array("A", "B", "C", "D");
+    if (r < 0.7) numtext = itoa(nn);
+    else if (r < 0.85) numtext = letters[int(floor(hr(seed, 952, 7) * 3.99))] + "-" + itoa(nn);
+    else numtext = itoa(1 + int(floor(hr(seed, 953, 7) * 9.99))) + "-" + itoa(nn);
+}
+if (chi("../../bldg_suffix")) numtext += "号棟";
+setdetailattrib(0, "numtext", numtext);

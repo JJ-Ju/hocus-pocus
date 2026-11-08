@@ -1,0 +1,485 @@
+// chip_points_edge.vfl: Attribute Wrangle, Run Over: Detail.
+// Edge-centred breaks. Large damage removes the ARRIS itself: one cutter per impact,
+// centred on the edge line, oriented along it, longer than it is deep, and asymmetric.
+// The struck face keeps a small crushed bite about one chip depth d wide; the conchoidal
+// shell runs 2-3 d across the ADJACENT face and feathers out (edge-chip mechanics: the
+// crack starts under the contact and curves out of the other face). Faces only get small,
+// shallow pits, densest next to damaged edges: the force needed to chip rises linearly
+// with distance from the edge, and water and dirt gather at edges.
+//
+// Why: a cutter pushed into the piece along the bisector and flattened there (the old
+// chip_points_clustered.vfl) reaches both faces but not the arris, so it leaves two scoops
+// flanking an intact edge, which one impact never makes.
+//
+// Input 0: the clean closed piece, PRE-bevel, low poly.
+// Input 1: mask carrier from cluster_mask.vfl (point f@damage_mask, f@damage_hot; detail
+//          v[]@hs_P, f[]@hs_r, f[]@hs_s). Optional; without it the mask is 1.
+// Output: one point per cutter. pscale 1, v@scale = (half length along the edge, shell
+//   semi-axis across the shell face, thickness d into the material), p@orient (x = edge,
+//   y = across the shell face, z = into the material under it), i@variant, i@kind (0 nick,
+//   1 edge chip / larger run bite, 2 shell break, 3 shell satellite, 4 face pit,
+//   5 corner wedge, 6 run bite), f@len, f@depth (d),
+//   f@centre_off (centre distance from the arris / d), i@edge, f@epos (m along the edge),
+//   i@major (prim of the SHELL face, the one that loses more), i@etype (0 top, 1 vertical,
+//   2 bottom, 3 other), i@big, f@damage_mask. Detail i@adopted_major, i@pits.
+//   Copy unit-radius cutters with Copy to Points (pack OFF, piece attribute "variant"):
+//   variants 0-3 detailed noisy break cutters (feathered or hinged far end), 4-5 cheap
+//   nick cutters, 6-7 pit cutters.
+//
+// Spare parms:
+//   spacing, min_angle, keep_gamma          candidate spacing (m), dihedral (deg), keep = mask^g
+//   size_min, size_max                      chip half-length range (m), e.g. 0.01, 0.08
+//   size_bias, size_bias_hot, size_floor    as chip_points_clustered.vfl
+//   elong, break_thresh                     extra stretch along the edge in hotspots
+//   w_top, w_wind, w_vert, w_bottom, w_bottom_contact, w_other
+//                       exposure weights by edge type (keep, and size via sqrt): top outer
+//                       horizontal 1.0, windward vertical 0.8, other vertical 0.5, bottom
+//                       0.3, bottom inside the contact band (< contact_hi) 0.9
+//   contact_hi          top of the contact band (m above ground_y), e.g. 1.0
+//   weather, weather_freq   extra small frost/rain chips on top edges at ANY height, in
+//                       noise clusters with gaps, e.g. 0.35, 2.5
+//   dl_min, dl_max      length / depth range, e.g. 2.2, 3.5 (depth:length 1:2.2 .. 1:3.5)
+//   shell_min, shell_max    shell width across the adjacent face / d, e.g. 2, 3
+//   coff_min, coff_max  centre offset from the arris along the shell face / d, e.g. 0.2, 0.5
+//   major_p             probability the cause rule picks the shell face, e.g. 0.8
+//   impact_dir          vector the impacts and wind come from, e.g. {1, 0, 0.4}
+//   corner_size, corner_keep, corner_radius   chips near corners: size x(1+corner_size),
+//                       keep x(1+corner_keep) within corner_radius (m), e.g. 0.7, 1.5, 0.25
+//   big_size            half-length above which a cutter is "big", e.g. 0.035
+//   Hotspots (cluster_mask.vfl list) of strength >= run_s_min near an edge become, by
+//   mode: a corner WEDGE (vertex within wedge_radius, strength >= anchor_s_min, p_wedge),
+//   one SHELL break (strength >= anchor_s_min, p_shell), else a RUN of overlapping bites.
+//   run_s_min           e.g. 0.45
+//   run_min, run_max    run length (m), e.g. 0.2, 0.6
+//   bite_min, bite_max  bite half-length (m), Pareto-distributed, e.g. 0.0025, 0.015
+//   bite_alpha          Pareto exponent, e.g. 1.5
+//   run_step            bite spacing / bite length (< 1 overlaps), e.g. 0.7
+//   run_big_p           chance a run holds one larger bite (1-2 x bite_max), e.g. 0.5
+//   runs_per_edge       max runs per edge, e.g. 2
+//   p_shell, p_wedge    mode probabilities, e.g. 0.35, 0.6
+//   anchor_s_min, anchor_size, anchor_max, anchor_elong   shell break size from the hotspot
+//   shell_depth_max     cap on shell depth (m), e.g. 0.08
+//   sat_size            the second, smaller cut at a shell's end, fraction, e.g. 0.45
+//   wedge_radius, wedge_min, wedge_max   corner wedge reach and size (m), e.g. 0.15, 0.04, 0.09
+//   pit_spacing, pit_keep, pit_fall, pit_frac (<= 0.3), pit_ref, pit_min, pit_flat
+//                       face pits: candidate spacing (m), keep at mask 1 by an edge,
+//                       thinning distance from edges (m), max radius = pit_frac * pit_ref
+//                       (pit_ref = typical edge damage half-length, m), min radius,
+//                       depth / radius
+//   ground_y, seam_axis, seam_margin, seed
+
+function float mask_at(int carrier; vector P; string name) {
+    if (!carrier) return 1.0;
+    int hp; vector huv;
+    xyzdist(1, P, hp, huv);
+    return clamp(primuv(1, name, hp, huv), 0.0, 1.0);
+}
+
+function int near_seam(vector P; float reach; vector bmin; vector bmax; vector sa; float m) {
+    for (int ax = 0; ax < 3; ax++) {
+        if (getcomp(sa, ax) < 0.5) continue;
+        float lo = getcomp(P, ax) - getcomp(bmin, ax);
+        float hi = getcomp(bmax, ax) - getcomp(P, ax);
+        if (min(lo, hi) < m + reach) return 1;
+    }
+    return 0;
+}
+
+// Is face A the SHELL face (the one that loses more)? The struck face keeps a small bite,
+// the shell forms on the other face. Top edges: knocks come from above, so the shell goes
+// on the vertical face; frost/rain wear (weather = 1) takes the upper face. Bottom edges:
+// the side face (splash, kicks; the underside is on the ground). Vertical edges: the face
+// looking into impact_dir is struck, the shell is on the other. Flipped with 1 - p.
+function int shell_is_a(int ty; vector na; vector nb; vector impd; int weather; float r;
+                        float p) {
+    int a_shell;
+    if (ty == 0) a_shell = weather ? na.y > nb.y : na.y < nb.y;
+    else if (ty == 2) a_shell = abs(na.y) < abs(nb.y);
+    else a_shell = dot(na, impd) < dot(nb, impd);
+    if (r > p) a_shell = !a_shell;
+    return a_shell;
+}
+
+// place one edge-centred cutter; returns the point number or -1
+function int place(int e; float epos; float a; float d; float W; float c; int a_shell_in;
+                   int kind; int var; float m;
+                   vector eA[]; vector eT[]; vector eNa[]; vector eNb[]; int ePa[]; int ePb[];
+                   int eTy[]; int bE[]; int bMaj[]; float bPos[]; float bA[]; int n_adopted;
+                   float big_size; vector bmin; vector bmax; vector sa; float seam_m) {
+    vector T = eT[e], na = eNa[e], nb = eNb[e];
+    int a_shell = a_shell_in;
+    int big = a > big_size;
+    {
+        // never two scoops on opposite faces at one stretch of edge: a cutter that overlaps
+        // an earlier BIG one on this edge takes the same shell face
+        for (int j = 0; j < len(bE); j++) {
+            if (bE[j] != e) continue;
+            if (abs(bPos[j] - epos) < 0.9 * (bA[j] + a)) {
+                int pm = a_shell ? ePa[e] : ePb[e];
+                if (pm != bMaj[j]) { a_shell = bMaj[j] == ePa[e]; n_adopted++; }
+                break;
+            }
+        }
+    }
+    vector nS = a_shell ? na : nb;                    // shell face normal
+    vector nP = a_shell ? nb : na;                    // struck (platform) face normal
+    // frame: x along the edge, y across the shell face, z into the material under it
+    vector Y = normalize(cross(T, nS));
+    if (dot(Y, -nP) < 0) Y = -Y;
+    vector Z = -nS;
+    vector X = cross(Y, Z);
+    // centre on the arris, nudged c along the shell face; the semi-axes give a scar d wide
+    // on the struck face, W wide on the shell face, d thick, 2a long
+    vector P = eA[e] + T * epos + Y * c;
+    float wy = max(W - c, 0.5 * W);
+    float reach = max(a, W);
+    if (near_seam(P, reach, bmin, bmax, sa, seam_m)) return -1;
+    int pt = addpoint(0, P);
+    setpointattrib(0, "pscale", pt, 1.0);
+    setpointattrib(0, "scale", pt, set(a, wy, d));
+    setpointattrib(0, "orient", pt, quaternion(set(X, Y, Z)));
+    setpointattrib(0, "variant", pt, var);
+    setpointattrib(0, "kind", pt, kind);
+    setpointattrib(0, "len", pt, 2.0 * a);
+    setpointattrib(0, "depth", pt, d);
+    setpointattrib(0, "centre_off", pt, c / max(d, 1e-6));
+    setpointattrib(0, "edge", pt, e);
+    setpointattrib(0, "epos", pt, epos);
+    setpointattrib(0, "major", pt, a_shell ? ePa[e] : ePb[e]);
+    setpointattrib(0, "etype", pt, eTy[e]);
+    setpointattrib(0, "big", pt, big);
+    setpointattrib(0, "damage_mask", pt, m);
+    if (big) {
+        push(bE, e); push(bPos, epos); push(bA, a);
+        push(bMaj, a_shell ? ePa[e] : ePb[e]);
+    }
+    return pt;
+}
+
+// truncated power-law (Pareto) size: many small, few large
+function float pareto(float u; float lo; float hi; float alpha) {
+    float r = pow(lo / hi, alpha);
+    return lo * pow(1.0 - u * (1.0 - r), -1.0 / alpha);
+}
+
+float spacing = max(chf("spacing"), 0.005);
+float min_angle = chf("min_angle");
+float kgamma = chf("keep_gamma");
+float smin = chf("size_min"), smax = chf("size_max");
+float sbias0 = chf("size_bias"), sbias1 = chf("size_bias_hot"), sfloor = chf("size_floor");
+float elong = max(chf("elong"), 1.0), bthresh = chf("break_thresh");
+float weather = chf("weather"), wfreq = chf("weather_freq");
+float dl0 = chf("dl_min"), dl1 = chf("dl_max");
+float sh0 = chf("shell_min"), sh1 = chf("shell_max");
+float co0 = chf("coff_min"), co1 = chf("coff_max");
+float major_p = chf("major_p");
+vector impd = normalize(chv("impact_dir"));
+float csize = chf("corner_size"), ckeep = chf("corner_keep"), crad = max(chf("corner_radius"), 1e-3);
+float big_size = chf("big_size");
+float gy = chf("ground_y"), chi_ = chf("contact_hi");
+vector seam_axis = chv("seam_axis");
+float seam_m = chf("seam_margin");
+int seed = chi("seed");
+
+vector bmin, bmax;
+getbbox(0, bmin, bmax);
+int carrier = npoints(1) > 0 && haspointattrib(1, "damage_mask");
+
+// ---- convex edges, their type and exposure weight -------------------------------------
+vector eA[], eB[], eT[], eNa[], eNb[];
+int ePa[], ePb[], eTy[];
+float eW[];
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int pa = hedge_prim(0, he);
+    int pb = hedge_prim(0, hedge_nextequiv(0, he));
+    if (pa == pb || pb < 0) continue;
+    vector na = prim_normal(0, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(0, pb, {0.5, 0.5, 0});
+    vector ca = prim(0, "P", pa), cb = prim(0, "P", pb);
+    if (dot(na, cb - ca) >= 0) continue;
+    if (degrees(acos(clamp(dot(na, nb), -1.0, 1.0))) < min_angle) continue;
+    vector A = point(0, "P", hedge_srcpoint(0, he));
+    vector B = point(0, "P", hedge_dstpoint(0, he));
+    vector T = normalize(B - A);
+    vector outd = normalize(na + nb);
+    int ty = 3;
+    float w = chf("w_other");
+    if (abs(T.y) < 0.3) {
+        if (max(na.y, nb.y) > 0.7) { ty = 0; w = chf("w_top"); }
+        else if (min(na.y, nb.y) < -0.7) {
+            ty = 2;
+            w = 0.5 * (A.y + B.y) - gy < chi_ ? chf("w_bottom_contact") : chf("w_bottom");
+        }
+    } else if (abs(T.y) > 0.7) {
+        ty = 1;
+        w = dot(outd, impd) > 0 ? chf("w_wind") : chf("w_vert");
+    }
+    push(eA, A); push(eB, B); push(eT, T); push(eNa, na); push(eNb, nb);
+    push(ePa, pa); push(ePb, pb); push(eTy, ty); push(eW, w);
+}
+// corner flags of the edge ends: another convex edge meets there at an angle
+int eCa[], eCb[];
+resize(eCa, len(eA)); resize(eCb, len(eA));
+for (int e = 0; e < len(eA); e++)
+    for (int f = 0; f < len(eA); f++) {
+        if (f == e || abs(dot(eT[e], eT[f])) > 0.7) continue;
+        if (distance(eA[e], eA[f]) < 1e-4 || distance(eA[e], eB[f]) < 1e-4) eCa[e] = 1;
+        if (distance(eB[e], eA[f]) < 1e-4 || distance(eB[e], eB[f]) < 1e-4) eCb[e] = 1;
+    }
+
+int bE[], bMaj[];
+float bPos[], bA[];
+int n_adopted = 0;
+
+// ---- hotspots: a RUN of overlapping small bites (most), one shell break (some), or a
+// corner wedge (at vertices). In photographed concrete about half the arris damage is a
+// 20-60 cm run of overlapping 0.5-3 cm bites, about a third one larger shell break
+// (10-40 cm long, 3-8 cm deep), and two-face loss only at vertices, as one wedge.
+int hsrc = npoints(1) > 0 ? 1 : 0;
+vector hsP[] = detail(hsrc, "hs_P");
+float hsR[] = detail(hsrc, "hs_r");
+float hsS[] = detail(hsrc, "hs_s");
+float a_smin = chf("anchor_s_min"), a_size = chf("anchor_size");
+float a_max = chf("anchor_max"), a_el = chf("anchor_elong"), sat = chf("sat_size");
+float p_shell = chf("p_shell"), run_s_min = chf("run_s_min");
+float run0 = chf("run_min"), run1 = chf("run_max");
+float bite0 = chf("bite_min"), bite1 = chf("bite_max"), balpha = chf("bite_alpha");
+float rstep = chf("run_step"), run_big_p = chf("run_big_p");
+float shell_dmax = chf("shell_depth_max");
+float wrad = chf("wedge_radius"), ws0 = chf("wedge_min"), ws1 = chf("wedge_max");
+float p_wedge = chf("p_wedge");
+int max_runs = chi("runs_per_edge");
+int runs_on[]; resize(runs_on, len(eA));
+int n_runs = 0, n_shell = 0, n_wedge = 0, n_bites = 0;
+
+// vertices where three convex edges meet, with the inward edge directions
+vector cV[], cD0[], cD1[], cD2[];
+for (int e = 0; e < len(eA); e++) {
+    foreach (int end; {0, 1}) {
+        vector V = end == 0 ? eA[e] : eB[e];
+        int dup = 0;
+        foreach (vector q; cV) if (distance(q, V) < 1e-4) dup = 1;
+        if (dup) continue;
+        vector dirs[];
+        for (int f = 0; f < len(eA); f++) {
+            if (distance(eA[f], V) < 1e-4) push(dirs, eT[f]);
+            else if (distance(eB[f], V) < 1e-4) push(dirs, -eT[f]);
+        }
+        if (len(dirs) != 3) continue;
+        push(cV, V); push(cD0, dirs[0]); push(cD1, dirs[1]); push(cD2, dirs[2]);
+    }
+}
+
+
+for (int h = 0; h < len(hsP); h++) {
+    if (hsS[h] < run_s_min) continue;
+    float best = 1e9, bu = 0; int be = -1;
+    for (int e = 0; e < len(eA); e++) {
+        float Le = distance(eA[e], eB[e]);
+        float u = clamp(dot(hsP[h] - eA[e], eT[e]), 0.0, Le);
+        float dd = distance(eA[e] + eT[e] * u, hsP[h]);
+        if (dd < best) { best = dd; bu = u; be = e; }
+    }
+    if (be < 0 || best > hsR[h]) continue;         // a face hotspot: pits only, no break
+    float m = mask_at(carrier, hsP[h], "damage_mask");
+    // nearest vertex
+    float dv = 1e9; int cv = -1;
+    for (int c = 0; c < len(cV); c++) {
+        float dd = distance(cV[c], eA[be] + eT[be] * bu);
+        if (dd < dv) { dv = dd; cv = c; }
+    }
+    float r_mode = rand(set(h, seed, 59));
+    // (1) corner wedge: one cutter centred on the vertex, axes along its three edges
+    if (cv >= 0 && dv < wrad && hsS[h] >= a_smin && r_mode < p_wedge) {
+        vector X = cD0[cv], Y = cD1[cv], Z = cD2[cv];
+        if (dot(cross(X, Y), Z) < 0) { vector tmp = X; X = Y; Y = tmp; }
+        float ws = fit01(rand(set(h, seed, 51)), ws0, ws1);
+        vector sc = ws * set(fit01(rand(set(h, seed, 52)), 0.6, 1.3),
+                             fit01(rand(set(h, seed, 53)), 0.6, 1.3),
+                             fit01(rand(set(h, seed, 54)), 0.6, 1.3));
+        vector V = cV[cv] + (X + Y + Z) * 0.1 * ws;   // just inside the vertex
+        if (near_seam(V, max(sc), bmin, bmax, seam_axis, seam_m)) continue;
+        int pt = addpoint(0, V);
+        setpointattrib(0, "pscale", pt, 1.0);
+        setpointattrib(0, "scale", pt, sc);
+        setpointattrib(0, "orient", pt, quaternion(set(X, Y, Z)));
+        setpointattrib(0, "variant", pt, int(rand(set(h, seed, 55)) * 4) % 4);
+        setpointattrib(0, "kind", pt, 5);
+        setpointattrib(0, "len", pt, 2 * max(sc));
+        setpointattrib(0, "depth", pt, min(sc));
+        setpointattrib(0, "centre_off", pt, 0.0);
+        setpointattrib(0, "edge", pt, -2);
+        setpointattrib(0, "etype", pt, -2);
+        setpointattrib(0, "big", pt, 1);
+        setpointattrib(0, "damage_mask", pt, m);
+        n_wedge++;
+        continue;
+    }
+    int as = shell_is_a(eTy[be], eNa[be], eNb[be], impd, 0, rand(set(h, seed, 64)), major_p);
+    float Le = distance(eA[be], eB[be]);
+    // (2) one larger shell break, plus a second smaller cut at one end
+    // the strongest hotspot always gets the one dominant break (80/20: one big, many small)
+    if (hsS[h] >= a_smin && (h == 0 || rand(set(h, seed, 58)) < p_shell)) {
+        // a_max caps the final half-length (shells 10-40 cm long in the photo study), so
+        // the depth cap rarely bites and depth:length stays inside dl_min..dl_max
+        float a = min(a_size * hsR[h] * hsS[h] * lerp(1.0, a_el, rand(set(h, seed, 61)))
+                      * sqrt(clamp(eW[be], 0.1, 1.0)), a_max);
+        float d = min(2.0 * a / fit01(rand(set(h, seed, 62)), dl0, dl1), shell_dmax);
+        float W = d * fit01(rand(set(h, seed, 63)), sh0, sh1);
+        float c = d * fit01(rand(set(h, seed, 60)), co0, co1);
+        int pt = place(be, bu, a, d, W, c, as, 2, int(rand(set(h, seed, 65)) * 4) % 4, m,
+                       eA, eT, eNa, eNb, ePa, ePb, eTy, bE, bMaj, bPos, bA, n_adopted,
+                       big_size, bmin, bmax, seam_axis, seam_m);
+        if (pt < 0) continue;
+        n_shell++;
+        int as2 = point(0, "major", pt) == ePa[be];
+        float side = rand(set(h, seed, 67)) < 0.5 ? 1.0 : -1.0;
+        float a2 = a * sat * fit01(rand(set(h, seed, 68)), 0.7, 1.2);
+        float u2 = bu + side * a * fit01(rand(set(h, seed, 69)), 0.7, 0.95);
+        if (u2 > 0 && u2 < Le) {
+            float d2 = min(2.0 * a2 / fit01(rand(set(h, seed, 70)), dl0, dl1), 0.6 * d);
+            place(be, u2, a2, d2, d2 * fit01(rand(set(h, seed, 71)), sh0, sh1),
+                  d2 * fit01(rand(set(h, seed, 73)), co0, co1), as2, 3,
+                  int(rand(set(h, seed, 72)) * 4) % 4, m, eA, eT, eNa, eNb, ePa, ePb,
+                  eTy, bE, bMaj, bPos, bA, n_adopted, big_size, bmin, bmax, seam_axis, seam_m);
+        }
+        continue;
+    }
+    // (3) a run of overlapping small bites, all from the same struck face
+    if (runs_on[be] >= max_runs) continue;
+    runs_on[be]++;
+    n_runs++;
+    float Lr = fit01(rand(set(h, seed, 81)), run0, run1) * lerp(0.6, 1.0, hsS[h]);
+    float u = max(bu - 0.5 * Lr, 0.0), u_end = min(bu + 0.5 * Lr, Le);
+    float big_u = rand(set(h, seed, 82)) < run_big_p ? lerp(u, u_end, rand(set(h, seed, 83))) : 1e9;
+    int k = 0;
+    while (u < u_end && k < 200) {
+        // bites thin out toward the run's ends
+        float tt = abs(u - bu) / max(0.5 * Lr, 1e-3);
+        float a = pareto(rand(set(h, k, seed, 84)), bite0, bite1, balpha) * lerp(1.0, 0.6, tt);
+        int kind = 6;
+        if (u >= big_u) {
+            big_u = 1e9;
+            a = fit01(rand(set(h, seed, 85)), 1.0, 2.0) * bite1;   // the one larger bite
+            kind = 1;
+        }
+        float d = 2.0 * a / fit01(rand(set(h, k, seed, 86)), dl0, dl1);
+        float W = d * fit01(rand(set(h, k, seed, 87)), sh0, sh1);
+        float c = d * fit01(rand(set(h, k, seed, 88)), co0, co1);
+        // a few bites in a run come from the other side (small, never big)
+        int asb = rand(set(h, k, seed, 89)) < 0.1 && kind == 6 ? !as : as;
+        int pt = place(be, u, a, d, W, c, asb, kind, 4 + int(rand(set(h, k, seed, 90)) * 2) % 2,
+                       m, eA, eT, eNa, eNb, ePa, ePb, eTy, bE, bMaj, bPos, bA, n_adopted,
+                       big_size, bmin, bmax, seam_axis, seam_m);
+        if (pt >= 0) n_bites++;
+        u += 2.0 * a * rstep * fit01(rand(set(h, k, seed, 91)), 0.5, 1.5);
+        k++;
+    }
+}
+setdetailattrib(0, "n_runs", n_runs);
+setdetailattrib(0, "n_shell", n_shell);
+setdetailattrib(0, "n_wedge", n_wedge);
+setdetailattrib(0, "n_bites", n_bites);
+
+// ---- edge chips: mask x exposure x corner sets keep and size ----------------------------
+vector woff = vector(rand(set(seed, 9, 9))) * 50.0;
+for (int e = 0; e < len(eA); e++) {
+    float Le = distance(eA[e], eB[e]);
+    float fn = Le / spacing;
+    int n = int(fn + rand(set(e, seed, 5)));
+    float tw = eW[e];
+    for (int i = 0; i < n; i++) {
+        vector4 key = set(e, i, seed, 0);
+        float u = (i + rand(key + {0, 0, 0, 7})) / max(fn, 1e-6) * Le;
+        if (u > Le) continue;
+        vector P = eA[e] + eT[e] * u;
+        float dc = 1e9;
+        if (eCa[e]) dc = min(dc, u);
+        if (eCb[e]) dc = min(dc, Le - u);
+        float cf = 1.0 - smooth(0.0, crad, dc);
+        float m = mask_at(carrier, P, "damage_mask");
+        float keep = pow(m, kgamma) * tw * (1.0 + ckeep * cf);
+        // frost and rain on ground-parallel top edges at any height: small, clustered
+        float wth = 0;
+        if (eTy[e] == 0 && weather > 0)
+            wth = weather * smooth(0.5, 0.72, noise(P * wfreq + woff));
+        float r0 = rand(key);
+        if (r0 > keep + wth) continue;
+        int from_weather = r0 > keep;
+        float sb = lerp(sbias0, sbias1, m);
+        float s = fit01(pow(rand(key + {0, 0, 0, 3}), sb), smin, smax);
+        s *= lerp(sfloor, 1.0, m) * sqrt(clamp(tw, 0.1, 1.0)) * (1.0 + csize * cf);
+        if (from_weather) s = min(s, lerp(smin, smax, 0.3));
+        s = max(s, smin);
+        float hot = smooth(bthresh - 0.1, bthresh + 0.1, m);
+        float st = lerp(1.0, lerp(1.0, elong, rand(key + {0, 0, 0, 17})), hot);
+        float a = s * st;
+        float d = 2.0 * a / fit01(rand(key + {0, 0, 0, 21}), dl0, dl1);
+        float W = d * fit01(rand(key + {0, 0, 0, 23}), sh0, sh1);
+        float c = d * fit01(rand(key + {0, 0, 0, 24}), co0, co1);
+        int as = shell_is_a(eTy[e], eNa[e], eNb[e], impd, from_weather,
+                            rand(key + {0, 0, 0, 25}), major_p);
+        int medium = a > 0.6 * big_size;
+        int var = medium ? int(rand(key + {0, 0, 0, 19}) * 4) % 4
+                         : 4 + int(rand(key + {0, 0, 0, 19}) * 2) % 2;
+        place(e, u, a, d, W, c, as, medium, var, m, eA, eT, eNa, eNb, ePa, ePb, eTy,
+              bE, bMaj, bPos, bA, n_adopted, big_size, bmin, bmax, seam_axis, seam_m);
+    }
+}
+
+// ---- face pits: small, shallow, densest next to damaged edges -------------------------
+float pit_sp = max(chf("pit_spacing"), 0.005), pit_keep = chf("pit_keep");
+float pit_fall = max(chf("pit_fall"), 1e-3), pit_rmax = min(chf("pit_frac"), 0.3) * chf("pit_ref");
+float pit_rmin = chf("pit_min"), pit_flat = chf("pit_flat");
+int npits = 0;
+for (int pr = 0; pr < nprimitives(0); pr++) {
+    vector N = prim_normal(0, pr, {0.5, 0.5, 0});
+    if (N.y < -0.5) continue;                      // underside: on the ground
+    float ow = N.y > 0.5 ? 1.5 : 1.0;              // rain pits horizontal faces more
+    float area = primintrinsic(0, "measuredarea", pr);
+    float fn = area / (pit_sp * pit_sp);
+    int n = int(fn + rand(set(pr, seed, 81)));
+    for (int i = 0; i < n; i++) {
+        vector4 key = set(pr, i, seed, 1);
+        vector uv = set(rand(key + {0, 0, 0, 1}), rand(key + {0, 0, 0, 2}), 0);
+        vector P = primuv(0, "P", pr, uv);
+        float de = 1e9;
+        for (int e = 0; e < len(eA); e++) {
+            float u = clamp(dot(P - eA[e], eT[e]), 0.0, distance(eA[e], eB[e]));
+            de = min(de, distance(eA[e] + eT[e] * u, P));
+        }
+        float m = mask_at(carrier, P, "damage_mask");
+        float mh = mask_at(carrier, P, "damage_hot");
+        float near = exp(-de / pit_fall);
+        float keep = pit_keep * ow * (0.15 + 0.85 * m) * (0.12 + near) * (0.5 + mh);
+        if (rand(key) > keep) continue;
+        float r = fit01(pow(rand(key + {0, 0, 0, 3}), 3.0), pit_rmin, pit_rmax);
+        r *= lerp(1.0, 0.5, smooth(0.0, 0.4, de));    // force dissipates: smaller inboard
+        r = max(r, pit_rmin);
+        if (de < 1.6 * r + 0.01) continue;            // the arris belongs to edge damage
+        if (near_seam(P, r, bmin, bmax, seam_axis, seam_m)) continue;
+        vector tu = normalize(cross(N, abs(N.y) > 0.9 ? {1, 0, 0} : {0, 1, 0}));
+        vector tv = cross(N, tu);
+        float ang = rand(key + {0, 0, 0, 5}) * 2 * PI;
+        vector X = tu * cos(ang) + tv * sin(ang);
+        vector Y = cross(N, X);
+        int pt = addpoint(0, P);
+        setpointattrib(0, "pscale", pt, 1.0);
+        setpointattrib(0, "scale", pt, set(r, r * fit01(rand(key + {0, 0, 0, 6}), 0.6, 1.0),
+                                           r * pit_flat * fit01(rand(key + {0, 0, 0, 7}), 0.7, 1.3)));
+        setpointattrib(0, "orient", pt, quaternion(set(X, Y, N)));
+        setpointattrib(0, "variant", pt, 6 + int(rand(key + {0, 0, 0, 8}) * 2) % 2);
+        setpointattrib(0, "kind", pt, 4);
+        setpointattrib(0, "len", pt, 2 * r);
+        setpointattrib(0, "depth", pt, r * pit_flat);
+        setpointattrib(0, "edge", pt, -1);
+        setpointattrib(0, "etype", pt, -1);
+        setpointattrib(0, "big", pt, 0);
+        setpointattrib(0, "damage_mask", pt, m);
+        npits++;
+    }
+}
+setdetailattrib(0, "adopted_major", n_adopted);
+setdetailattrib(0, "pits", npits);
+for (int pr = nprimitives(0) - 1; pr >= 0; pr--) removeprim(0, pr, 1);

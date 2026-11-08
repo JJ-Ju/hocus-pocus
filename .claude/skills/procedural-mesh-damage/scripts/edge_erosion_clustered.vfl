@@ -1,0 +1,41 @@
+// edge_erosion_clustered.vfl: Volume Wrangle on a VDB SDF named "surface" (VDB from
+// Polygons, interior band >= 10 voxels). edge_erosion.vfl with the height bias replaced by
+// the cluster mask, so soft wear sits in the hotspots and the rest keeps a crisp arris.
+// Input 1: convex edge polylines (convex_edges.vfl on the pre-bevel piece).
+// Input 2: mask carrier with f@damage_halo (cluster_mask.vfl on a dense copy).
+// Convert back with Convert VDB (poly, adaptivity 0.1-0.3), then transfer uv, N, Cd.
+//
+// Spare parms:
+//   edge_width  float  width of the eroded band at mask 1 (m), e.g. 0.07
+//   depth       float  erosion depth at mask 1 (m), e.g. 0.045
+//   bg_depth    float  erosion depth at mask 0 (m): a slight softening everywhere, e.g. 0.004
+//   freq        float  noise frequency (1/m), e.g. 14
+//   seam_axis   vector axes whose bounding faces are seams, e.g. {1,0,0}
+//   seam_margin float  clean distance at seams (m), e.g. 0.06
+//   seed        int
+
+float d = xyzdist(1, @P);
+int hp; vector huv;
+xyzdist(2, @P, hp, huv);
+float hot = clamp(primuv(2, "damage_halo", hp, huv), 0.0, 1.0);
+float w = lerp(chf("edge_width") * 0.3, chf("edge_width"), hot);
+float band = 1.0 - smooth(0.0, w, d);
+
+vector bmin, bmax;
+getbbox(1, bmin, bmax);
+vector seam_axis = chv("seam_axis");
+float seam_m = chf("seam_margin");
+for (int ax = 0; ax < 3; ax++) {
+    if (getcomp(seam_axis, ax) < 0.5) continue;
+    float lo = getcomp(@P, ax) - getcomp(bmin, ax);
+    float hi = getcomp(bmax, ax) - getcomp(@P, ax);
+    band *= smooth(0.0, seam_m, min(lo, hi));
+}
+
+float f1, f2;
+int wseed;                                   // wnoise needs an int variable here
+wnoise(@P * chf("freq") + chi("seed"), wseed, f1, f2);
+float chunky = clamp(fit(f2 - f1, 0.0, 0.6, 1.0, 0.0), 0.0, 1.0);
+float nicks = noise(@P * chf("freq") * 4.0 + chi("seed"));
+float depth = lerp(chf("bg_depth"), chf("depth"), hot);
+@surface += band * depth * (pow(chunky, 2.0) + 0.3 * nicks);

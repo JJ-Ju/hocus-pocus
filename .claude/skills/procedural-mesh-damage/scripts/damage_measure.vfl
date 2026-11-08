@@ -1,0 +1,204 @@
+// damage_measure.vfl: Attribute Wrangle, Run Over: Detail, on the damaged piece.
+// Measures WHERE the damage is: edge breaks versus face pits, chip depth:length, and the
+// "two scoops flanking an intact arris" pattern.
+//
+// Input 0: damaged piece; prim i@island = cut-face island id (Connectivity, prim, include
+//          group "cut"), -1 elsewhere.
+// Input 1: the clean bevelled reference the cutters were subtracted from.
+// Input 2: the clean low-poly pre-bevel piece (its convex edges are probed).
+//
+// Writes detail attributes:
+//   i@islands, i@edge_islands, i@face_islands; f@edge_area_share, f@edge_count_share
+//   f[]@isl_len, f[]@isl_depth, i[]@isl_edge, f[]@isl_area   per island
+//   f@edge_dl_median, f@edge_dl_p10, f@edge_dl_p90           depth / length of edge breaks
+//   f@face_size_max, f@edge_len_median, f@face_to_edge        face pit size vs edge breaks
+//   i@flank_runs     runs (>= flank_min_run cm) where BOTH faces are scooped 8 mm deep
+//                    4-7 cm from the edge while the arris between them stands
+//   i@flank_samples, i@arris_broken_samples, i@edge_samples (1 cm samples)
+//
+// Spare parms: probe_u (m from the edge, e.g. 0.05), probe_d (m under the clean surface,
+//   e.g. 0.008), flank_min_run (samples, e.g. 2), corner_skip (m, e.g. 0.04), edge_tol (an
+//   island reaching this close to a convex edge line is edge damage, m, e.g. 0.012)
+
+function int inside(int geo; vector P) {
+    vector dirs[] = array({0.5377, 0.8188, 0.2015}, {-0.3133, 0.4177, 0.8529},
+                          {0.7071, -0.2121, -0.6745});
+    int votes = 0;
+    foreach (vector d; dirs) {
+        vector pos[]; int prm[]; vector uvw[];
+        int n = intersect_all(geo, "", P, normalize(d) * 50.0, pos, prm, uvw, 1e-5, 1e-5);
+        votes += n % 2;
+    }
+    return votes >= 2;
+}
+
+// ---- convex edges of the low piece --------------------------------------------------
+vector eA[], eB[], eT[], eNa[], eNb[];
+for (int he = 0; he < nvertices(2); he++) {
+    if (!hedge_isprimary(2, he)) continue;
+    int pa = hedge_prim(2, he);
+    int pb = hedge_prim(2, hedge_nextequiv(2, he));
+    if (pa == pb || pb < 0) continue;
+    vector na = prim_normal(2, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(2, pb, {0.5, 0.5, 0});
+    vector ca = prim(2, "P", pa), cb = prim(2, "P", pb);
+    if (dot(na, cb - ca) >= 0) continue;
+    if (degrees(acos(clamp(dot(na, nb), -1.0, 1.0))) < 30) continue;
+    vector A = point(2, "P", hedge_srcpoint(2, he)), B = point(2, "P", hedge_dstpoint(2, he));
+    push(eA, A); push(eB, B); push(eT, normalize(B - A)); push(eNa, na); push(eNb, nb);
+}
+
+// ---- islands ---------------------------------------------------------------------------
+int nisl = 0;
+for (int p = 0; p < nprimitives(0); p++) nisl = max(nisl, prim(0, "island", p) + 1);
+float iarea[]; resize(iarea, nisl);
+float idepth[]; resize(idepth, nisl);
+float imin[]; resize(imin, nisl);
+float imax[]; resize(imax, nisl);
+int iedge_e[]; resize(iedge_e, nisl);
+vector nfirst[]; resize(nfirst, nisl);
+int nhas[]; resize(nhas, nisl);
+int ispans[]; resize(ispans, nisl);
+for (int i = 0; i < nisl; i++) { imin[i] = 1e9; imax[i] = -1e9; iedge_e[i] = -1; }
+
+// nearest edge per island = nearest edge to the island's area-weighted centre
+vector icen[]; resize(icen, nisl);
+for (int p = 0; p < nprimitives(0); p++) {
+    int is = prim(0, "island", p);
+    if (is < 0) continue;
+    float a = primintrinsic(0, "measuredarea", p);
+    iarea[is] += a;
+    icen[is] += vector(prim(0, "P", p)) * a;
+}
+for (int i = 0; i < nisl; i++) {
+    icen[i] /= max(iarea[i], 1e-12);
+    float best = 1e9;
+    for (int e = 0; e < len(eA); e++) {
+        float u = clamp(dot(icen[i] - eA[e], eT[e]), 0.0, distance(eA[e], eB[e]));
+        float d = distance(eA[e] + eT[e] * u, icen[i]);
+        if (d < best) { best = d; iedge_e[i] = e; }
+    }
+}
+// extent along that edge and depth under the clean reference
+for (int pt = 0; pt < npoints(0); pt++) {
+    int prs[] = pointprims(0, pt);
+    vector P = point(0, "P", pt);
+    float dref = -1;
+    foreach (int p; prs) {
+        int is = prim(0, "island", p);
+        if (is < 0) continue;
+        if (dref < 0) dref = xyzdist(1, P);
+        idepth[is] = max(idepth[is], dref);
+        int e = iedge_e[is];
+        float u = dot(P - eA[e], eT[e]);
+        imin[is] = min(imin[is], u);
+        imax[is] = max(imax[is], u);
+    }
+}
+// does the island span an arris? its non-cut neighbours face directions > 60 deg apart
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int pa = hedge_prim(0, he);
+    int pb = hedge_prim(0, hedge_nextequiv(0, he));
+    if (pa == pb || pb < 0) continue;
+    int ia = prim(0, "island", pa), ib = prim(0, "island", pb);
+    if ((ia < 0) == (ib < 0)) continue;
+    int is = ia >= 0 ? ia : ib;
+    int other = ia >= 0 ? pb : pa;
+    vector n = prim_normal(0, other, {0.33, 0.33, 0});
+    if (!nhas[is]) { nfirst[is] = n; nhas[is] = 1; }
+    else if (dot(n, nfirst[is]) < 0.5) ispans[is] = 1;
+}
+// or reaches within edge_tol of a convex edge line (bevel strips have in-between normals)
+float etol = chf("edge_tol");
+for (int pt = 0; pt < npoints(0); pt++) {
+    vector P = point(0, "P", pt);
+    int prs[] = pointprims(0, pt);
+    foreach (int p; prs) {
+        int is = prim(0, "island", p);
+        if (is < 0 || ispans[is]) continue;
+        for (int e = 0; e < len(eA); e++) {
+            float u = clamp(dot(P - eA[e], eT[e]), 0.0, distance(eA[e], eB[e]));
+            if (distance(eA[e] + eT[e] * u, P) < etol) { ispans[is] = 1; break; }
+        }
+    }
+}
+
+float isl_len[], isl_depth[], isl_area[];
+int isl_edge[];
+float edge_area = 0, tot_area = 0, edge_dl[], edge_len[], face_size_max = 0;
+int n_edge = 0, n_face = 0;
+for (int i = 0; i < nisl; i++) {
+    if (iarea[i] <= 0) continue;
+    float L = imax[i] - imin[i];
+    push(isl_len, L); push(isl_depth, idepth[i]); push(isl_area, iarea[i]);
+    push(isl_edge, ispans[i]);
+    tot_area += iarea[i];
+    if (ispans[i]) {
+        n_edge++; edge_area += iarea[i];
+        if (L > 0.03) push(edge_dl, idepth[i] / L);
+        push(edge_len, L);
+    } else {
+        n_face++;
+        face_size_max = max(face_size_max, 2.0 * sqrt(iarea[i] / PI));
+    }
+}
+edge_dl = sort(edge_dl);
+edge_len = sort(edge_len);
+i@islands = n_edge + n_face;
+i@edge_islands = n_edge;
+i@face_islands = n_face;
+f@edge_area_share = edge_area / max(tot_area, 1e-12);
+f@edge_count_share = float(n_edge) / max(n_edge + n_face, 1);
+f[]@isl_len = isl_len; f[]@isl_depth = isl_depth; f[]@isl_area = isl_area;
+i[]@isl_edge = isl_edge;
+int nd = len(edge_dl);
+f@edge_dl_median = nd ? edge_dl[nd / 2] : -1;
+f@edge_dl_p10 = nd ? edge_dl[int(nd * 0.1)] : -1;
+f@edge_dl_p90 = nd ? edge_dl[min(nd - 1, int(nd * 0.9))] : -1;
+// big edge breaks: the upper third by length
+int nl = len(edge_len);
+f@edge_len_median = nl ? edge_len[nl / 2] : -1;
+f@edge_len_big = nl ? edge_len[min(nl - 1, int(nl * 0.8))] : -1;
+f@face_size_max = face_size_max;
+f@face_to_edge = nl ? face_size_max / max(edge_len[min(nl - 1, int(nl * 0.8))], 1e-6) : -1;
+
+// ---- flanking scoops along each convex edge --------------------------------------------
+float pu = chf("probe_u"), pd = chf("probe_d"), cskip = chf("corner_skip");
+int minrun = max(chi("flank_min_run"), 1);
+int runs = 0, nflank = 0, nbroken = 0, nsamp = 0;
+for (int e = 0; e < len(eA); e++) {
+    vector T = eT[e], na = eNa[e], nb = eNb[e];
+    vector outd = normalize(na + nb);
+    vector dA = normalize(cross(T, na)); if (dot(dA, -nb) < 0) dA = -dA;  // along face A
+    vector dB = normalize(cross(T, nb)); if (dot(dB, -na) < 0) dB = -dB;
+    float Le = distance(eA[e], eB[e]);
+    int run = 0;
+    for (float u = cskip; u <= Le - cskip; u += 0.01) {
+        vector C = eA[e] + T * u;
+        nsamp++;
+        // the clean (bevelled) surface at the arris, along the bisector
+        vector hp, huv;
+        int hpr = intersect(1, C + outd * 0.2, -outd * 0.4, hp, huv);
+        if (hpr < 0) hp = C;
+        int core = inside(0, hp - outd * pd);
+        int remA = 0, remB = 0;
+        float uus[] = array(pu, pu + 0.02);
+        foreach (float uu; uus) {
+            vector pa_ = C + dA * uu - na * pd;
+            vector pb_ = C + dB * uu - nb * pd;
+            if (inside(1, pa_) && !inside(0, pa_)) remA = 1;
+            if (inside(1, pb_) && !inside(0, pb_)) remB = 1;
+        }
+        int fl = remA && remB && core;
+        nflank += fl;
+        nbroken += !core;
+        if (fl) run++;
+        else { if (run >= minrun) runs++; run = 0; }
+    }
+    if (run >= minrun) runs++;
+}
+i@flank_runs = runs;
+i@flank_samples = nflank;
+i@arris_broken_samples = nbroken;
+i@edge_samples = nsamp;

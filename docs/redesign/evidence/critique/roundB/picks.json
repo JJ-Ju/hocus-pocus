@@ -1,0 +1,194 @@
+[
+ {
+  "pair": "bay-1",
+  "left": "v3/03_golden_bay_9m",
+  "right": "v2/03_golden_bay_lit",
+  "choice": "right",
+  "winner": "v2/03_golden_bay_lit",
+  "note": "A does looks good, but something about the streaking is too uniform. The distribution along the balcony edge (the spacing between each streak) is too uniform, the streaks themselves feel a little too uniform (mostly long and narrow, very little partial or short streaks and no wider streaks suggesting water built up on the surface, and the intensity/alpha and color of the staining is too uniform too) B arguably looks about the same underneath, but the fact there's only a little streaking looks believable for a fairy new building that had just one bad area. We should think about applying detail on the final assets as a few levels, the micro, mid, and macro for example."
+ },
+ {
+  "pair": "bay-2",
+  "left": "v2/03_golden_bay_lit",
+  "right": "v4/02_golden_bay_close",
+  "choice": "left",
+  "winner": "v2/03_golden_bay_lit",
+  "note": "The heavy streaks on B are way too intense and uniform throughout. Even if there are heavy water stains from age, I would expect a large stained surface to have variety in the distribution of staining."
+ },
+ {
+  "pair": "bay-3",
+  "left": "v5/04_golden_bay_street_distance",
+  "right": "v2/03_golden_bay_lit",
+  "choice": "right",
+  "winner": "v2/03_golden_bay_lit",
+  "note": "The detail on A looks ok, the streaking is a little uniform (evenly spaced), but the main issue is the render just looks like an old video game. And I think even \"clean\" surfaces need some very subtle noise and variance in the surface (too flat) and base paint coat."
+ },
+ {
+  "pair": "bay-4",
+  "left": "v3/03_golden_bay_9m",
+  "right": "v4/02_golden_bay_close",
+  "choice": "left",
+  "winner": "v3/03_golden_bay_9m",
+  "note": "The heavy streaks/stains on B just don't look believable at all. As mentioned before the large stains themselves need variance within them. Maybe try to build up large streaks by layering different opacities of streaks, and large streaks are where they accumulate."
+ },
+ {
+  "pair": "bay-5",
+  "left": "v5/04_golden_bay_street_distance",
+  "right": "v3/03_golden_bay_9m",
+  "choice": "right",
+  "winner": "v3/03_golden_bay_9m",
+  "note": "Mostly the rendering, quality of assets looks similar to me. Maybe A has the edge but the lighting situation looks like a mid-2000s game."
+ },
+ {
+  "pair": "bay-6",
+  "left": "v4/02_golden_bay_close",
+  "right": "v5/04_golden_bay_street_distance",
+  "choice": "right",
+  "winner": "v5/04_golden_bay_street_distance",
+  "note": ""
+ },
+ {
+  "pair": "close-1",
+  "left": "v2/02_golden_piece_closeup",
+  "right": "v1/03_closeup_balconies",
+  "choice": "left",
+  "winner": "v2/02_golden_piece_closeup",
+  "note": "The \"stucco-like\" material isn't too bad for details, although I expected something more like concrete. And although it lacks the streaking, B's building has the problems i was describing before, and it lacks mid and micro details, for both the surface texture and wear and tear and streaking and any other factors that a realistic building might have."
+ },
+ {
+  "pair": "close-2",
+  "left": "v2/02_golden_piece_closeup",
+  "right": "v3/02_golden_piece_closeup",
+  "choice": "right",
+  "winner": "v3/02_golden_piece_closeup",
+  "note": "B has a good balance of surface detail and streaking, although still not perfect. I sense the same spacing uniformity problem and the width and shape of streaks problem that others had. But overall it has a little bit of everything that works towards a good asset."
+ },
+ {
+  "pair": "close-3",
+  "left": "v5/03_golden_piece_parapet_damage",
+  "right": "v3/02_golden_piece_closeup",
+  "choice": "right",
+  "winner": "v3/02_golden_piece_closeup",
+  "note": "The lighting and render on B looks better, and the damage on the balcony doesn't look too believable on A. Remember we talked about edges being more likely to take damage first. And that's big damage in the picture, I would have expect smaller damage considering the rest of the building looks fairly new if not a little water stained. And damage should generally radiate out right, from the area with the most damage outward, where the damage gets smaller and smaller. Just having a big chunk of the side of the balcony rail missing looks awkward for story telling."
+ },
+ {
+  "pair": "close-4",
+  "left": "v2/02_golden_piece_closeup",
+  "right": "v5/03_golden_piece_parapet_damage",
+  "choice": "left",
+  "winner": "v2/02_golden_piece_closeup",
+  "note": "Same issue, generally speaking B isn't bad, but the isolated damage stands out as unusual."
+ },
+ {
+  "pair": "corr-1",
+  "left": "v4/04_corridor_bay_close",
+  "right": "v2/13_corridor_closeup",
+  "choice": "right",
+  "winner": "v2/13_corridor_closeup",
+  "note": "Better render with subtler lighting and good mix of material and wear and tear and streaking. Although, it is weird tha the streaking is heavy on one side, and it's a bit weird that some streaking starts right in the middle of a 90-degree balcony wall. Not that it can't happen sometimes or if someone cleaned it, but just looks unusual."
+ },
+ {
+  "pair": "corr-2",
+  "left": "v4/04_corridor_bay_close",
+  "right": "v5/06_corridor_side_core",
+  "choice": "right",
+  "winner": "v5/06_corridor_side_core",
+  "note": "B isn't remarkably good but kind of believable as a corporate park office building or something. The clustered streaking is unusual though, also, don't forget corners and inner edges let water and debris and dust accumulate. That's where there will be more wear and tear usually."
+ },
+ {
+  "pair": "corr-3",
+  "left": "v5/06_corridor_side_core",
+  "right": "v2/13_corridor_closeup",
+  "choice": "right",
+  "winner": "v2/13_corridor_closeup",
+  "note": "As mentioned before B is one of the renders that has a little bit of everything that's a step towards making a good asset, just the streaking direction and distribution in some areas is weird."
+ },
+ {
+  "pair": "end-1",
+  "left": "v4/05_gable_number",
+  "right": "v5/07_end_wall_number",
+  "choice": "left",
+  "winner": "v4/05_gable_number",
+  "note": "Interesting building and good use of all the improvements we talked about. I think it could benefit from the micro, mid, macro detailing and wear and tear I mentioned before. Looks good but it looks like the streaking is clustered too much. I know I spoke of 80/20, but that also applies at multiple levels of scale. And sometimes realism, like simulating water and rain staining, doesn't follow that rule, so you need to find the right balance and blend between realism and artistic intent."
+ },
+ {
+  "pair": "facade-1",
+  "left": "v3/04_facade_35m_gate",
+  "right": "v2/05_facade_across_street",
+  "choice": "right",
+  "winner": "v2/05_facade_across_street",
+  "note": "B just looks more interesting and has more going for it. But again, things that are the result of physical phenomena need to follow reality. I would expect that rain would gather mostly at the top floors and a little less at the bottom, similar to how you approached the increased wear at the first floor around human level. And also, don't forget about 1) color fading from the light 2) paint chipping and 3) just general subtle color variations in painting and materials. Not even concrete is perfectly uniform! That's where you'll find the most use of the 80/20 rule probably."
+ },
+ {
+  "pair": "seeds-1",
+  "left": "v4/07_variation_9up",
+  "right": "v2/08_variation_9_seeds_se",
+  "choice": "right",
+  "winner": "v2/08_variation_9_seeds_se",
+  "note": "Hard to tell because the way the comparison pictures are staged, but B is better because it's showing me real heights and sizes between each building."
+ },
+ {
+  "pair": "seeds-2",
+  "left": "v4/07_variation_9up",
+  "right": "v5/09_variation_9up",
+  "choice": "right",
+  "winner": "v5/09_variation_9up",
+  "note": "Similar reason here. The comparisons themselves aren't ideal. That said if the intent was for me to look at the buildings in each photo independently then A would be good for picking the best of or a few minor variations I like from the set, while B looks like a collage from an asset bundle. Different use cases."
+ },
+ {
+  "pair": "seeds-3",
+  "left": "v5/09_variation_9up",
+  "right": "v2/08_variation_9_seeds_se",
+  "choice": "same",
+  "winner": null,
+  "note": "About the same, but like I said it's hard to determine the quality of A vs. B's assets in this format. Rather it's more about what this can show me (variations of different sized buildings generated by the generator) which is about the same in terms of usefulness to me."
+ },
+ {
+  "pair": "street-1",
+  "left": "v3/10_hero_street",
+  "right": "v4/01_hero_street",
+  "choice": "left",
+  "winner": "v3/10_hero_street",
+  "note": "B's balcony faces look too pristine and uniform. And the composition with the empty road and jus two apartment complexes just doesn't look believable."
+ },
+ {
+  "pair": "street-2",
+  "left": "v5/05_street_view_balcony_side",
+  "right": "v4/01_hero_street",
+  "choice": "left",
+  "winner": "v5/05_street_view_balcony_side",
+  "note": "Again, B's balcony faces look brightly uniform in this shot. It's missing the macro-level detail I was talking about. And the composition and story is weaker too, although they're similar in feeling very empty."
+ },
+ {
+  "pair": "street-3",
+  "left": "v3/10_hero_street",
+  "right": "v5/05_street_view_balcony_side",
+  "choice": "left",
+  "winner": "v3/10_hero_street",
+  "note": "A has decent composition, B has weak composition as mentioned in the previous comparison."
+ },
+ {
+  "pair": "street-4",
+  "left": "v5/05_street_view_balcony_side",
+  "right": "v2/06_building_south_east",
+  "choice": "left",
+  "winner": "v5/05_street_view_balcony_side",
+  "note": "B actually doesn't look too bad as an asset, but doesn't look believable standing in an empty plane."
+ },
+ {
+  "pair": "street-5",
+  "left": "v1/01_estate_day",
+  "right": "v5/05_street_view_balcony_side",
+  "choice": "right",
+  "winner": "v5/05_street_view_balcony_side",
+  "note": "A's macro details, the very large and long streaking on the side, is too uniform. Some areas will probably have water go all the way down to the ground, some areas the water might stop a quarter of the way down from the seams/sills or halfway down. Similar issue as the balcony streaking I was talking about but on a larger scale. And the composition isn't good in the overall render shot."
+ },
+ {
+  "pair": "street-6",
+  "left": "v3/10_hero_street",
+  "right": "v2/06_building_south_east",
+  "choice": "left",
+  "winner": "v3/10_hero_street",
+  "note": "A is the best overall so far, still far from perfect unfortunately."
+ }
+]

@@ -1,0 +1,857 @@
+// decals.vfl — detail wrangle (round 7). Input 1 = causes (the plan, the w_* weathering values
+// from weather_params, the cause field), input 2 = shell (eave, tank_P), input 3 = dress (piece
+// points, to find the damaged balcony fronts).
+//
+// Every weathering layer that needs more resolution than the vertex colour, as mesh decals:
+// quads 4-10 mm off their face, clipped to the face, mapped to a cell of tex/weather_atlas.png
+// (alpha only). Colour = prim Cd, opacity = prim Alpha (both become vertex colour RGBA in the
+// bake, so an engine needs one material: albedo = vertex RGB, opacity = atlas x vertex A).
+// Pieces that cross a repaint patch are cut at its edges and take less opacity inside it.
+//
+// Layers (wlayer, also the stacking order): 0 stain field, 1 soot cloud, 2 growth, 3 splash,
+// 4 inside-corner grime, 5 streak, 6 rust, 7 efflorescence, 8 worn edge.
+// Rules (procedural-materials/references/weather-and-use.md and the user's picks):
+// - every streak starts at a feature: rail posts, parapet joints and low points, drip-less tops,
+//   sill ends, downpipes, landing windows, chips; never mid-wall;
+// - seeded strength per source (20-30 % dominate), power-law lengths (median ~0.35 m, a tail
+//   of 2-3 m), irregular spacing with clean gaps, widths from hair runs to curtains where water
+//   collects, colour by cause (soot, damp green-black, rust, pale washed);
+// - top floors x(1 + bias), windward faces get more driven rain, worse columns of flats;
+// - stain fields: 3-6 layered blotches at 10-45 % opacity per field, clustered at causes, the
+//   top band, the windward corner and the base, over a faint background;
+// - inside corners collect; the base takes splash, growth (north), a tide mark.
+
+#define LY_STAIN 0
+#define LY_SOOT 1
+#define LY_BIO 2
+#define LY_SPLASH 3
+#define LY_CORNER 4
+#define LY_STREAK 5
+#define LY_RUST 6
+#define LY_EFFLO 7
+#define LY_WEAR 8
+#define PT PS0, PS1, PY0, PY1, PFAC
+#define CZ cP, cR, cS, cT, cSide
+
+// atlas cell rectangle (u0, v0, u1, v1): kind 0 streak (16), 1 blotch (16), 2 strip (8)
+function vector4 cellr(int kind; int idx)
+{
+    float m = 3.0 / 4096.0;
+    if (kind == 0) return set(idx / 16.0 + m, 0.5 + m, (idx + 1) / 16.0 - m, 1.0 - m);
+    if (kind == 1) {
+        int c = idx % 4, r = idx / 4;
+        return set(c / 8.0 + m, 0.5 - (r + 1) / 8.0 + m, (c + 1) / 8.0 - m, 0.5 - r / 8.0 - m);
+    }
+    return set(0.5 + m, 0.5 - (idx + 1) / 16.0 + m, 1.0 - m, 0.5 - idx / 16.0 - m);
+}
+
+// one quad: the full decal spans [s0,s1]x[y0,y1] in face coordinates (s along r = up x n, y up);
+// this piece covers [a0,a1]x[b0,b1] of it. rot 1 turns a strip cell upright (u down the face).
+function void dq1(vector n; float d0; float s0; float s1; float y0; float y1;
+                  float a0; float a1; float b0; float b1; vector4 c; int rot; int fu; int fv;
+                  float slant; vector col; float alpha; int layer)
+{
+    vector r = cross({0, 1, 0}, n);
+    float off = 0.004 + 0.0007 * layer;
+    float ss[] = array(a0, a1, a1, a0);
+    float yy[] = array(b1, b1, b0, b0);
+    int pts[];
+    for (int i = 0; i < 4; i++) {
+        float sx = ss[i] + slant * (y1 - yy[i]);
+        vector p = r * sx + set(0, yy[i], 0) + n * (d0 + off);
+        append(pts, addpoint(0, p));
+    }
+    int pr = addprim(0, "poly", pts[0], pts[1], pts[2], pts[3]);
+    for (int i = 0; i < 4; i++) {
+        float ua = (ss[i] - s0) / (s1 - s0);
+        float vb = (yy[i] - y0) / (y1 - y0);
+        float u, v;
+        if (rot == 0) { u = fu ? 1 - ua : ua; v = fv ? 1 - vb : vb; }
+        else { u = fu ? vb : 1 - vb; v = fv ? 1 - ua : ua; }
+        float uu = c[0] + (c[2] - c[0]) * u;
+        float vv = c[1] + (c[3] - c[1]) * v;
+        setvertexattrib(0, "uv", pr, i, set(uu, vv, 0));
+    }
+    float area = (a1 - a0) * (b1 - b0);
+    setprimattrib(0, "mat", pr, "decal");
+    setprimattrib(0, "cdkey", pr, "own");
+    setprimattrib(0, "Cd", pr, col);
+    setprimattrib(0, "Alpha", pr, alpha);
+    setprimattrib(0, "dstr", pr, alpha);
+    setprimattrib(0, "wlayer", pr, layer);
+    setprimattrib(0, "decal", pr, 1);
+    // LOD1 keeps the large pieces only (it has ~2k triangles to spare in its 100k budget)
+    setprimattrib(0, "dlod", pr, (area > 1.5 || (layer == LY_SPLASH && area > 0.3)) ? 1 : 0);
+}
+
+// clip to the face rect, cut at repaint-patch edges, emit; returns the number of quads
+function int dq(vector n; float d0; float s0; float s1; float y0; float y1;
+                float cs0; float cs1; float cy0; float cy1;
+                int kind; int idx; int rot; int fu; int fv; float slant; vector col; float alpha; int layer;
+                float ps0[]; float ps1[]; float py0[]; float py1[]; float pfac)
+{
+    float a0 = max(s0, cs0), a1 = min(s1, cs1), b0 = max(y0, cy0), b1 = min(y1, cy1);
+    if (a1 - a0 < 0.004 || b1 - b0 < 0.004 || alpha < 0.006) return 0;
+    vector4 c = cellr(kind, idx);
+    float sc[] = array(a0, a1);
+    float yc[] = array(b0, b1);
+    for (int k = 0; k < len(ps0); k++) {
+        if (ps1[k] <= a0 || ps0[k] >= a1 || py1[k] <= b0 || py0[k] >= b1) continue;
+        if (ps0[k] > a0) append(sc, ps0[k]);
+        if (ps1[k] < a1) append(sc, ps1[k]);
+        if (py0[k] > b0) append(yc, py0[k]);
+        if (py1[k] < b1) append(yc, py1[k]);
+    }
+    sc = sort(sc);
+    yc = sort(yc);
+    int cnt = 0;
+    for (int i = 0; i + 1 < len(sc); i++) {
+        for (int j = 0; j + 1 < len(yc); j++) {
+            float u0 = sc[i], u1 = sc[i + 1], v0 = yc[j], v1 = yc[j + 1];
+            if (u1 - u0 < 1e-4 || v1 - v0 < 1e-4) continue;
+            float al = alpha;
+            float um = (u0 + u1) * 0.5, vm = (v0 + v1) * 0.5;
+            for (int k = 0; k < len(ps0); k++) {
+                if (um > ps0[k] && um < ps1[k] && vm > py0[k] && vm < py1[k]) { al *= pfac; break; }
+            }
+            dq1(n, d0, s0, s1, y0, y1, u0, u1, v0, v1, c, rot, fu, fv, slant, col, al, layer);
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+// a streak cell hanging from (sc, ytop): visible width vw, length ln
+function int streak(vector n; float d0; float sc; float ytop; float vw; float ln; int idx; int fu; float slant;
+                    float cs0; float cs1; float cy0; float cy1; vector col; float alpha; int layer; float FILL[];
+                    float ps0[]; float ps1[]; float py0[]; float py1[]; float pfac)
+{
+    float w = vw / FILL[idx];
+    return dq(n, d0, sc - w * 0.5, sc + w * 0.5, ytop - ln, ytop, cs0, cs1, cy0, cy1,
+              0, idx, 0, fu, 0, slant, col, alpha, layer, ps0, ps1, py0, py1, pfac);
+}
+
+// repaint patches of one side as rects in that face's coordinates
+function void prects(int side; int pside[]; int pb0[]; int pb1[]; int pf0[]; int pf1[]; float bx[]; float bw[];
+                     float zc; float H; float ps0[]; float ps1[]; float py0[]; float py1[])
+{
+    resize(ps0, 0); resize(ps1, 0); resize(py0, 0); resize(py1, 0);
+    for (int k = 0; k < len(pside); k++) {
+        if (pside[k] != side) continue;
+        float a, b, c, d;
+        if (side < 2) {
+            a = bx[pb0[k]] - bw[pb0[k]] * 0.5; b = bx[pb1[k]] + bw[pb1[k]] * 0.5;
+            c = PLINTH + pf0[k] * H - 0.15; d = PLINTH + (pf1[k] + 1) * H - 0.15;
+        } else {
+            a = zc + pb0[k]; b = zc + pb1[k] + 1.0;
+            c = PLINTH + pf0[k] * H; d = PLINTH + pf1[k] * H;
+        }
+        if (side == 1 || side == 3) { float t = a; a = -b; b = -t; }
+        append(ps0, a); append(ps1, b); append(py0, c); append(py1, d);
+    }
+}
+
+// streak colour by cause and side: soot grey-brown, damp green-black, rust brown
+function vector scolor(int ct; int north; float scol; float r1; float r2;
+                       vector SOOT; vector SOOT2; vector DAMP; vector RUST2)
+{
+    vector c = lerp(SOOT, SOOT2, r2);
+    float pd = scol * (north ? 0.55 : 0.22) + (ct == 0 ? 0.35 : 0.0);
+    if (r1 < pd) c = lerp(c, DAMP, 0.5 + 0.5 * r2);
+    else if (ct == 1 && r1 < pd + 0.35 * scol) c = lerp(c, RUST2, 0.65);
+    return c;
+}
+
+// power-law length (median ~0.33 x the range's low end x 2), with a long tail
+function float slength(int id; int layer; int seed; float lo; float hi; float slen; float stail)
+{
+    float l = hpow(id, layer, seed, lo, hi, 1.6) * slen;
+    if (hr(id, layer + 50, seed) < stail) l = hrange(id, layer + 51, seed, 2.0, 3.0) * slen;
+    return l;
+}
+
+// seeded source strength: most faint, 20-30 % dominant
+function float sstr(int id; int layer; int seed) { return 0.35 + 0.65 * pow(hr(id, layer, seed), 2.0); }
+
+// sideways drift of runs on a face under the driven rain (shift per metre of fall, <= ~0.05)
+function float fslant(vector n; vector wd; float X)
+{
+    vector r = cross({0, 1, 0}, n);
+    return 0.06 * X * dot(-wd, r) * clamp(dot(n, wd) + 0.3, 0, 1);
+}
+
+float FILL[] = array(0.176, 0.195, 0.195, 0.473, 0.445, 0.926, 0.855, 0.977, 0.977, 0.277, 0.727, 0.531, 0.895, 0.148, 0.578, 0.785);   // tex/weather_atlas.json
+addvertexattrib(0, "uv", {0, 0, 0});
+addprimattrib(0, "dstr", 0.0);
+addprimattrib(0, "Alpha", 1.0);
+addprimattrib(0, "wlayer", -1);
+addprimattrib(0, "decal", 0);
+addprimattrib(0, "dlod", 0);
+addprimattrib(0, "mat", "");
+addprimattrib(0, "cdkey", "");
+addprimattrib(0, "Cd", {1, 1, 1});
+
+int on = chi("../../decals");
+int seed = detail(1, "w_seed");
+float st = detail(1, "w_streak"), sden = detail(1, "w_sden"), slen = detail(1, "w_slen"), stail = detail(1, "w_stail");
+float swid = detail(1, "w_swid"), sint = detail(1, "w_sint"), scol = detail(1, "w_scol"), stop = detail(1, "w_stop");
+float stain = detail(1, "w_stain"), sscale = detail(1, "w_sscale"), corner = detail(1, "w_corner");
+float wear = detail(1, "w_wear"), rust = detail(1, "w_rust"), efflo = detail(1, "w_efflo"), bio = detail(1, "w_bio");
+float splash = detail(1, "w_splash"), splh = detail(1, "w_splh"), soil = detail(1, "w_soil"), X = detail(1, "w_exposure");
+float soot = detail(1, "w_soot");
+float PFAC = 1 - 0.85 * detail(1, "w_pcon");
+vector wd = detail(1, "w_wind");
+float rain[] = detail(1, "w_rain");
+float lee[] = detail(1, "w_lee");
+int pside[] = detail(1, "p_side");
+int pb0[] = detail(1, "p_b0"), pb1[] = detail(1, "p_b1"), pf0[] = detail(1, "p_f0"), pf1[] = detail(1, "p_f1");
+float W = detail(1, "W"), H = detail(1, "H"), x0 = detail(1, "x0"), L = detail(1, "L"), ytop = detail(1, "ytop");
+int floors = detail(1, "floors");
+float bx[] = detail(1, "bay_x");
+float bw[] = detail(1, "bay_w");
+int bt[] = detail(1, "bay_t");
+vector cP[] = detail(1, "cause_P");
+float cR[] = detail(1, "cause_r");
+float cS[] = detail(1, "cause_s");
+int cT[] = detail(1, "cause_t");
+int cSide[] = detail(1, "cause_side");
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W), x1 = x0 + L;
+int eave = detail(2, "eave");
+float gtop = eave ? ytop - 0.18 : ytop + 0.1 + ROOF_PARA;
+float rtop = eave ? ytop + 0.05 : ytop + 0.1;
+float ph = rtop + 2.8;                                 // penthouse (core tower) top
+
+vector wall = scheme_wall(chi("../../seed"), chs("../../style"));
+vector SOOT = {0.13, 0.12, 0.10}, SOOT2 = {0.085, 0.08, 0.07}, DAMP = {0.08, 0.095, 0.065};
+vector RUST = {0.33, 0.14, 0.05}, RUST2 = {0.22, 0.14, 0.09}, EFF = {0.80, 0.79, 0.75};
+vector BIO = {0.085, 0.10, 0.055}, BIO2 = {0.14, 0.15, 0.09}, DIRT = {0.25, 0.225, 0.185};
+vector CORN = {0.13, 0.12, 0.105}, STAINC = {0.19, 0.18, 0.155};
+vector PALE = min(wall * 1.1 + {0.03, 0.03, 0.03}, {0.86, 0.86, 0.85});
+vector WEAR = min(lerp(wall, {0.80, 0.80, 0.78}, 0.5) * 1.14, {0.88, 0.88, 0.87});
+float PS0[], PS1[], PY0[], PY1[];
+int did = 0;
+
+if (on) {
+// ================================================================ balcony side (south, +Z)
+prects(0, pside, pb0, pb1, pf0, pf1, bx, bw, zc, H, PS0, PS1, PY0, PY1);
+{
+    vector n = {0, 0, 1};
+    float d0 = zb, rn = rain[0], sl = fslant(n, wd, X);
+    for (int k = 0; k < len(bt); k++) {
+        if (bt[k] != 0) continue;
+        float xa = bx[k] - bw[k] * 0.5, xb = bx[k] + bw[k] * 0.5, sa = xa + rail_w(W);
+        float dx0, dx1, wx0, wx1;
+        bal_openings(W, dx0, dx1, wx0, wx1);
+        for (int f = 0; f < floors; f++) {
+            float yf = PLINTH + f * H;
+            float tk = 1 + stop * pow(f / max(1.0, floors - 1.0), 1.5);
+            int ppt = findattribval(1, "point", "id", f * 1000 + k * 10);
+            float cn = ppt >= 0 ? point(1, "colneglect", ppt) : 0.4;
+            float colk = 0.5 + 1.0 * cn;
+            float c0 = cause_at(set(bx[k], yf + 0.5, zb), 0, -1, CZ);
+            int ct = cause_type(set(bx[k], yf + 0.5, zb), 0, CZ);
+            float fs0 = sa + 0.012, fs1 = xb - 0.012, fy0 = yf - 0.15, fy1 = yf + 0.95;
+            // (a) rail posts: rust runs from the post pockets, efflorescence between them
+            int np = max(2, int(floor((xb - sa - 0.5) / 1.6)) + 1);
+            for (int i = 0; i < np; i++) {
+                did++;
+                float px = sa + 0.3 + i * (xb - sa - 0.6) / (np - 1);
+                float cr = cause_at(set(px, yf + 0.94, zb), 0, 1, CZ);
+                if (hr(did, 701, seed) < (0.12 + 0.8 * cr) * rust * 1.3 * tk * colk) {
+                    float l = min(slength(did, 702, seed, 0.12, 1.1, 1.0, 0.0), 1.1);
+                    float al = clamp((0.3 + 0.6 * cr) * (0.4 + 0.6 * rust) * hrange(did, 704, seed, 0.5, 1.0), 0, 0.9);
+                    streak(n, d0, px, fy1, hrange(did, 703, seed, 0.03, 0.06) * swid, l, hr(did, 706, seed) < 0.3 ? 10 : 9,
+                           hr(did, 707, seed) < 0.5, 0, fs0, fs1, fy0, fy1, lerp(RUST, RUST2, hr(did, 705, seed)), al, LY_RUST, FILL, PT);
+                }
+                if (i + 1 < np && hr(did, 708, seed) < efflo * (0.22 + 0.6 * c0) * tk) {
+                    float nx = sa + 0.3 + (i + 1) * (xb - sa - 0.6) / (np - 1);
+                    float ex = px + (nx - px) * hrange(did, 709, seed, 0.25, 0.75);
+                    streak(n, d0, ex, fy1, hrange(did, 710, seed, 0.04, 0.1), hrange(did, 711, seed, 0.15, 0.6), 15,
+                           hr(did, 712, seed) < 0.5, 0, fs0, fs1, fy0, fy1, EFF,
+                           clamp(0.2 + 0.6 * efflo, 0, 0.85) * hrange(did, 713, seed, 0.5, 1.0), LY_EFFLO, FILL, PT);
+                }
+            }
+            // (b) the V-joints at both ends of the solid parapet: water finds the joint
+            float joints[] = array(sa, xb);
+            foreach (float jx; joints) {
+                did++;
+                float c = cause_at(set(jx, fy1, zb), 0, -1, CZ);
+                if (hr(did, 711, seed) < (0.3 + 0.6 * c) * st * sden * rn * tk) {
+                    float l = min(slength(did, 712, seed, 0.2, 1.3, slen, stail), 1.1);
+                    float rc = hr(did, 713, seed);
+                    int cell = rc < 0.35 ? int(floor(hr(did, 714, seed) * 2.999)) : rc < 0.7 ? 3 + int(floor(hr(did, 715, seed) * 1.999)) : 11 + (hr(did, 715, seed) < 0.5);
+                    float vw = (cell >= 11 ? hrange(did, 716, seed, 0.4, 0.8) : cell >= 3 ? hrange(did, 716, seed, 0.2, 0.4) : hrange(did, 716, seed, 0.04, 0.10)) * swid;
+                    float al = (0.5 + 0.6 * c) * sint * (0.3 + 0.7 * st) * sstr(did, 717, seed) * tk * colk;
+                    streak(n, d0, jx + (jx == sa ? 0.03 : -0.03), fy1, vw, l, cell, hr(did, 718, seed) < 0.5, sl,
+                           fs0, fs1, fy0, fy1, scolor(ct, 0, scol, hr(did, 719, seed), hr(did, 720, seed), SOOT, SOOT2, DAMP, RUST2),
+                           clamp(al, 0, 0.9), LY_STREAK, FILL, PT);
+                }
+            }
+            // (c) low points along the parapet top: irregular spacing, mostly short or partial
+            float x = sa + hrange(did, 721, seed, 0.05, 0.6);
+            while (x < xb - 0.08) {
+                did++;
+                float c = cause_at(set(x, fy1, zb), 0, -1, CZ);
+                if (hr(did, 722, seed) < (0.22 + 0.9 * c) * st * sden * rn * tk) {
+                    float l = min(slength(did, 723, seed, 0.08, 1.1, slen, stail * 0.5), 1.1);
+                    int cell = hr(did, 724, seed) < 0.45 ? 13 : int(floor(hr(did, 725, seed) * 2.999));
+                    float al = (0.4 + 0.6 * c) * sint * (0.3 + 0.7 * st) * sstr(did, 726, seed) * tk * colk;
+                    streak(n, d0, x, fy1, hrange(did, 727, seed, 0.03, 0.09) * swid, l, cell, hr(did, 729, seed) < 0.5, sl,
+                           fs0, fs1, fy0, fy1, scolor(ct, 0, scol, hr(did, 730, seed), hr(did, 731, seed), SOOT, SOOT2, DAMP, RUST2),
+                           clamp(al, 0, 0.9), LY_STREAK, FILL, PT);
+                }
+                x += hpow(did, 728, seed, 0.12, 1.8, 1.4);
+            }
+            // (d) water collects against the partition fin at the right end: a wide curtain
+            did++;
+            if (hr(did, 732, seed) < 0.14 * st * (1 + 2 * c0) * rn * tk) {
+                float vw = hrange(did, 733, seed, 0.4, 1.0) * swid;
+                float al = (0.35 + 0.4 * c0) * sint * (0.3 + 0.7 * st) * tk * colk;
+                streak(n, d0, xb - vw * 0.5, fy1, vw, 1.1, 5 + (hr(did, 734, seed) < 0.5), hr(did, 735, seed) < 0.5, sl,
+                       fs0, fs1, fy0, fy1, scolor(ct, 0, scol, hr(did, 736, seed), hr(did, 737, seed), SOOT, SOOT2, DAMP, RUST2),
+                       clamp(al, 0, 0.8), LY_STREAK, FILL, PT);
+            }
+            // (e) a leak story: a layered stain with a damp colour
+            float cl = cause_at(set(bx[k], yf + 0.5, zb), 0, 0, CZ);
+            did++;
+            if (cl > 0.25 && hr(did, 738, seed) < 0.85 * st) {
+                float sx = hrange(did, 739, seed, sa + 0.4, xb - 0.6);
+                streak(n, d0, sx, fy1, hrange(did, 740, seed, 0.5, 1.2) * swid, 1.1, 11 + (hr(did, 741, seed) < 0.5),
+                       hr(did, 742, seed) < 0.5, sl, fs0, fs1, fy0, fy1, lerp(SOOT, DAMP, 0.6),
+                       clamp((0.45 + 0.5 * cl) * sint * (0.3 + 0.7 * st), 0, 0.85), LY_STREAK, FILL, PT);
+            }
+            // (e2) the parapet face greys under its lip: a dark band, and on many fronts a broad
+            //      layered stain where the run-off concentrates (worse columns of flats first)
+            did++;
+            if (hr(did, 770, seed) < 0.55 * st * colk * tk) {
+                dq(n, d0, sa, xb, fy1 - hrange(did, 771, seed, 0.18, 0.35), fy1, fs0, fs1, fy0, fy1, 2, 6, 0, hr(did, 772, seed) < 0.5, 0, 0,
+                   SOOT, clamp((0.2 + 0.3 * st) * colk * tk, 0, 0.7), LY_SOOT, PT);
+            }
+            did++;
+            if (hr(did, 773, seed) < 0.6 * st * colk * tk) {
+                float vw = hrange(did, 774, seed, 0.6, 1.8) * swid;
+                float sx = hrange(did, 775, seed, sa + vw * 0.3, xb - vw * 0.3);
+                streak(n, d0, sx, fy1, vw, 1.1, 11 + (hr(did, 776, seed) < 0.5), hr(did, 777, seed) < 0.5, sl, fs0, fs1, fy0, fy1,
+                       scolor(ct, 0, scol, hr(did, 778, seed), hr(did, 779, seed), SOOT, SOOT2, DAMP, RUST2),
+                       clamp((0.3 + 0.3 * c0) * sint * (0.3 + 0.7 * st) * colk * tk, 0, 0.75), LY_STREAK, FILL, PT);
+            }
+            // (f) the open-rail section: short runs from the baluster feet down the slab edge
+            for (float bxx = xa + 0.15; bxx < sa - 0.1; bxx += 0.45) {
+                did++;
+                if (hr(did, 743, seed) < 0.3 * st * sden * rn * tk) {
+                    int isr = hr(did, 744, seed) < rust * 0.6;
+                    streak(n, d0, bxx + hrange(did, 745, seed, -0.1, 0.1), yf + 0.1, hrange(did, 746, seed, 0.03, 0.07), hrange(did, 747, seed, 0.06, 0.25),
+                           13, hr(did, 748, seed) < 0.5, 0, xa + 0.01, sa - 0.01, yf - 0.15, yf + 0.1,
+                           isr ? RUST2 : SOOT, clamp(0.5 * sint * st * tk * sstr(did, 749, seed) * 2, 0, 0.8), isr ? LY_RUST : LY_STREAK, FILL, PT);
+                }
+            }
+            // (g) worn arrises: the parapet top edge (weight 1.0), the slab bottom edge (0.3)
+            did++;
+            if (wear > 0 && hr(did, 750, seed) < 0.4 + 0.6 * wear) {
+                float u0 = hrange(did, 751, seed, sa, sa + 0.8), u1 = hrange(did, 752, seed, xb - 0.8, xb);
+                dq(n, d0, u0, u1, fy1 - 0.035, fy1 + 0.005, sa, xb, fy0, fy1 + 0.01, 2, 4 + (hr(did, 753, seed) < 0.5), 0,
+                   hr(did, 754, seed) < 0.5, 0, 0, WEAR, clamp(wear * (0.5 + 0.5 * c0) * 0.9, 0, 0.9), LY_WEAR, PT);
+                dq(n, d0, xa, xb, fy0 - 0.005, fy0 + 0.03, xa, xb, fy0, fy1, 2, 4 + (hr(did, 755, seed) < 0.5), 0,
+                   hr(did, 756, seed) < 0.5, 0, 0, WEAR, clamp(wear * 0.35, 0, 0.9), LY_WEAR, PT);
+            }
+            // (h) the back wall in the recess: inside corners and the window sill ends
+            {
+                float d1 = D_DEPTH * 0.5;
+                float yc1 = yf + H - 0.15;
+                float ca = clamp(corner * (0.45 + 0.3 * hr(did, 757, seed)) * colk, 0, 0.9);
+                float hb = 0.18 + 0.15 * corner;
+                // floor junction (the door opening has no wall), soffit junction (wall above the openings)
+                dq(n, d1, xa, bx[k] + dx0, yf, yf + hb, xa, bx[k] + dx0, yf, yc1, 2, 2, 0, 0, 0, 0, CORN, ca, LY_CORNER, PT);
+                dq(n, d1, bx[k] + dx1, xb, yf, yf + hb, bx[k] + dx1, xb, yf, yc1, 2, 3, 0, 1, 0, 0, CORN, ca, LY_CORNER, PT);
+                dq(n, d1, xa, xb, yc1 - hb * 1.3, yc1, xa, xb, yf + 2.0, yc1, 2, 3 - (k % 2), 0, 1, 1, 0, CORN, ca * 0.8, LY_CORNER, PT);
+                // vertical corners at the fins / partitions (dense edge at the corner)
+                dq(n, d1, xa, xa + 0.28, yf, yc1, xa, bx[k] + dx0, yf, yc1, 2, 2 + (f % 2), 1, 0, 0, 0, CORN, ca * 0.8, LY_CORNER, PT);
+                dq(n, d1, xb - 0.28, xb, yf, yc1, bx[k] + wx1, xb, yf, yc1, 2, 3 - (f % 2), 1, 0, 1, 0, CORN, ca * 0.8, LY_CORNER, PT);
+                // sill-end fans under the balcony window: a V, the wall under the middle cleaner
+                float ends[] = array(bx[k] + wx0 - 0.02, bx[k] + wx1 + 0.02);
+                foreach (float ex; ends) {
+                    did++;
+                    if (hr(did, 758, seed) < 0.5 * st * sden * tk) {
+                        streak(n, d1, ex, yf + 0.9, hrange(did, 759, seed, 0.2, 0.4) * swid, hrange(did, 760, seed, 0.4, 0.9) * slen,
+                               3 + (hr(did, 761, seed) < 0.5), hr(did, 762, seed) < 0.5, 0, bx[k] + dx1, xb, yf, yf + 0.9,
+                               scolor(ct, 0, scol, hr(did, 763, seed), hr(did, 764, seed), SOOT, SOOT2, DAMP, RUST2),
+                               clamp((0.35 + 0.4 * c0) * sint * (0.3 + 0.7 * st) * sstr(did, 765, seed) * 1.6, 0, 0.85), LY_STREAK, FILL, PT);
+                    }
+                }
+            }
+        }
+    }
+    // chips on the damaged fronts: a spall is a source too (rebar rust, efflorescence)
+    did = 1000000;   // own id range: the number of damaged fronts must not reseed what follows
+    string kb = opfullpath("../kit_bal_front");
+    for (int pt = 0; pt < npoints(3); pt++) {
+        string nm = point(3, "name", pt);
+        if (!startswith(nm, "bal_front_v") || nm == "bal_front_v0") continue;
+        int v = atoi(nm[11:]);
+        vector bp = point(3, "P", pt);
+        vector hsP[] = detail("op:" + kb + "/cluster_v" + itoa(v), "hs_P");
+        float hsR[] = detail("op:" + kb + "/cluster_v" + itoa(v), "hs_r");
+        float hsS[] = detail("op:" + kb + "/cluster_v" + itoa(v), "hs_s");
+        int f = point(3, "floor", pt);
+        float yf = PLINTH + f * H;
+        float sa = bp.x - W * 0.5 + rail_w(W);
+        for (int h = 0; h < len(hsP); h++) {
+            did++;
+            vector hp = bp + hsP[h];
+            if (hsP[h].z < 1.1 || hsS[h] < 0.45) continue;
+            // the paint around a spall is worn back to the lighter substrate: a soft blotch on the
+            // face (as a decal: vertex colour on the long triangles of a chipped front smeared it
+            // into light wedges)
+            if (wear > 0) {
+                float rr = clamp(hsR[h] * 0.8, 0.08, 0.45) * hrange(did, 785, seed, 0.8, 1.2);
+                dq(n, d0, hp.x - rr, hp.x + rr, hp.y - rr * 0.8, hp.y + rr * 0.6, sa + 0.012, bp.x + W * 0.5 - 0.012, yf - 0.15, yf + 0.95,
+                   1, int(floor(hr(did, 786, seed) * 1.999)), 0, hr(did, 787, seed) < 0.5, 0, 0, WEAR,
+                   clamp((0.25 + 0.35 * hsS[h]) * wear, 0, 0.5), LY_WEAR, PT);
+            }
+            if (hr(did, 790, seed) < rust * 1.2) {
+                float yy = min(hp.y + 0.03, yf + 0.95);
+                streak(n, d0, hp.x, yy, clamp(hsR[h] * 0.25, 0.03, 0.12), min(yy - (yf - 0.15), hrange(did, 791, seed, 0.4, 1.1)),
+                       10, hr(did, 792, seed) < 0.5, 0, sa + 0.012, bp.x + W * 0.5 - 0.012, yf - 0.15, yf + 0.95,
+                       lerp(RUST, RUST2, hr(did, 793, seed)), clamp(0.35 + 0.5 * rust * hsS[h], 0, 0.9), LY_RUST, FILL, PT);
+            }
+            if (hr(did, 794, seed) < efflo * 0.8) {
+                streak(n, d0, hp.x + hrange(did, 795, seed, -0.15, 0.15), min(hp.y, yf + 0.9), hrange(did, 796, seed, 0.05, 0.12), hrange(did, 797, seed, 0.2, 0.6),
+                       15, hr(did, 798, seed) < 0.5, 0, sa + 0.012, bp.x + W * 0.5 - 0.012, yf - 0.15, yf + 0.95,
+                       EFF, clamp(0.3 + 0.5 * efflo, 0, 0.85), LY_EFFLO, FILL, PT);
+            }
+        }
+    }
+}
+
+// ================================================================ corridor side (north, -Z): s = -x
+// Each section (and each gable sub-block) starts its own id range, so a layer whose count follows
+// a control (damaged fronts, streaks off, splash, growth) never reseeds the layers after it.
+did = 2000000;
+prects(1, pside, pb0, pb1, pf0, pf1, bx, bw, zc, H, PS0, PS1, PY0, PY1);
+{
+    vector n = {0, 0, -1};
+    float d0 = -zc, rn = rain[1], sl = fslant(n, wd, X);
+    // downpipes: at the gable corners and every second unit (gen_shell); dark lines at both sides
+    float pipes[] = array(x0 + 0.12, x1 - 0.12);
+    for (int k = 0; k < len(bt); k++) if (bt[k] == 0 && k % 2 == 0) append(pipes, bx[k] + bw[k] * 0.5 - 0.25);
+    for (int k = 0; k < len(bt); k++) {
+        if (bt[k] != 0) continue;
+        float xa = bx[k] - bw[k] * 0.5, xb = bx[k] + bw[k] * 0.5;
+        float sA = -xb, sB = -xa;
+        for (int f = 0; f < floors; f++) {
+            float yf = PLINTH + f * H;
+            float tk = 1 + stop * pow(f / max(1.0, floors - 1.0), 1.5);
+            int ppt = findattribval(1, "point", "id", f * 1000 + k * 10 + 1);
+            float cn = ppt >= 0 ? point(1, "colneglect", ppt) : 0.4;
+            float colk = 0.5 + 1.0 * cn;
+            float c0 = cause_at(set(bx[k], yf + 0.5, zc), 1, -1, CZ);
+            int ct = cause_type(set(bx[k], yf + 0.5, zc), 1, CZ);
+            float fs0 = sA + 0.012, fs1 = sB - 0.012, fy0 = yf - 0.15, fy1 = yf + 1.1;
+            // (a) fringe under the drip-less parapet top: segments with gaps
+            float s = sA + hrange(did, 801, seed, 0.0, 0.6);
+            while (s < sB - 0.3) {
+                did++;
+                float seg = hpow(did, 802, seed, 0.4, 2.2, 1.5);
+                float c = cause_at(set(-(s + seg * 0.5), fy1, zc), 1, -1, CZ);
+                if (hr(did, 803, seed) < (0.3 + c) * st * sden * rn * tk) {
+                    float l = min(slength(did, 804, seed, 0.25, 1.25, slen, 0.0), 1.24);
+                    streak(n, d0, s + seg * 0.5, fy1, min(seg, sB - s - 0.05), l, 7 + (hr(did, 805, seed) < 0.4), hr(did, 806, seed) < 0.5, sl,
+                           fs0, fs1, fy0, fy1, scolor(ct, 1, scol, hr(did, 807, seed), hr(did, 808, seed), SOOT, SOOT2, DAMP, RUST2),
+                           clamp((0.3 + 0.5 * c) * tk * hrange(did, 809, seed, 0.6, 1.0) * (0.3 + 0.7 * st) * sint * colk, 0, 0.85), LY_STREAK, FILL, PT);
+                }
+                s += seg + hpow(did, 810, seed, 0.1, 1.5, 1.2);
+            }
+            did++;
+            if (hr(did, 848, seed) < 0.5 * st * colk * tk) {
+                dq(n, d0, sA, sB, fy1 - hrange(did, 849, seed, 0.15, 0.3), fy1, fs0, fs1, fy0, fy1, 2, 6, 0, hr(did, 850, seed) < 0.5, 0, 0,
+                   SOOT, clamp((0.2 + 0.3 * st) * colk * tk, 0, 0.7), LY_SOOT, PT);
+            }
+            // (b) runs at the parapet joints
+            float js[] = array(sA, sB);
+            foreach (float jx; js) {
+                did++;
+                if (hr(did, 811, seed) < (0.25 + 0.6 * c0) * st * sden * rn * tk) {
+                    streak(n, d0, jx + (jx == sA ? 0.03 : -0.03), fy1, hrange(did, 812, seed, 0.04, 0.10) * swid,
+                           min(slength(did, 813, seed, 0.2, 1.3, slen, stail), 1.24), int(floor(hr(did, 814, seed) * 2.999)),
+                           hr(did, 815, seed) < 0.5, sl, fs0, fs1, fy0, fy1,
+                           scolor(ct, 1, scol, hr(did, 816, seed), hr(did, 817, seed), SOOT, SOOT2, DAMP, RUST2),
+                           clamp((0.5 + 0.5 * c0) * sint * (0.3 + 0.7 * st) * sstr(did, 818, seed) * tk * colk, 0, 0.9), LY_STREAK, FILL, PT);
+                }
+            }
+            // (c) downpipes in front of this bay: a dark line down each side of the pipe
+            foreach (float pxx; pipes) {
+                if (pxx < xa || pxx > xb) continue;
+                for (int sd = -1; sd <= 1; sd += 2) {
+                    did++;
+                    if (hr(did, 819, seed) < 0.7 * st) {
+                        streak(n, d0, -pxx + sd * 0.075, fy1, hrange(did, 820, seed, 0.03, 0.05), 1.24, int(floor(hr(did, 821, seed) * 2.999)),
+                               0, 0, fs0, fs1, fy0, fy1, SOOT, clamp(0.5 * sint * (0.3 + 0.7 * st) * tk, 0, 0.8), LY_STREAK, FILL, PT);
+                    }
+                }
+            }
+            // (d) rust from a fixing on the slab edge
+            did++;
+            if (hr(did, 822, seed) < (0.08 + 0.6 * cause_at(set(bx[k], yf, zc), 1, 1, CZ)) * rust) {
+                streak(n, d0, hrange(did, 823, seed, sA + 0.3, sB - 0.3), yf + 0.2, 0.03, hrange(did, 824, seed, 0.2, 0.34), 9, 0, 0,
+                       fs0, fs1, fy0, fy1, RUST, clamp(0.3 + 0.4 * rust, 0, 0.8), LY_RUST, FILL, PT);
+            }
+            // (e) growth where the corridor parapet stays damp (north, leaks)
+            did++;
+            float cl = cause_at(set(bx[k], yf, zc), 1, 0, CZ);
+            if (hr(did, 825, seed) < bio * (0.08 + 0.8 * cl)) {
+                float bwid = hrange(did, 826, seed, 0.6, 1.6), bc = hrange(did, 827, seed, sA + 0.5, sB - 0.5);
+                dq(n, d0, bc - bwid * 0.5, bc + bwid * 0.5, fy0 - 0.1, fy0 + bwid * 0.6, fs0, fs1, fy0, fy1, 1, 6 + int(floor(hr(did, 828, seed) * 2.999)), 0,
+                   hr(did, 829, seed) < 0.5, 0, 0, lerp(BIO, BIO2, hr(did, 830, seed)), clamp((0.3 + 0.5 * bio) * (0.5 + cl), 0, 0.85), LY_BIO, PT);
+            }
+            // (f) worn parapet top arris
+            did++;
+            if (wear > 0 && hr(did, 831, seed) < 0.3 + 0.6 * wear) {
+                dq(n, d0, hrange(did, 832, seed, sA, sA + 1.0), hrange(did, 833, seed, sB - 1.0, sB), fy1 - 0.035, fy1 + 0.005, sA, sB, fy0, fy1 + 0.01,
+                   2, 4 + (hr(did, 834, seed) < 0.5), 0, hr(did, 835, seed) < 0.5, 0, 0, WEAR, clamp(wear * 0.7, 0, 0.9), LY_WEAR, PT);
+            }
+            // (g) the corridor back wall: floor and ceiling junctions, kitchen window sill ends
+            {
+                float d1 = D_DEPTH * 0.5;
+                float yc1 = yf + H - 0.15;
+                float ca = clamp(corner * (0.5 + 0.3 * hr(did, 836, seed)) * colk, 0, 0.9);
+                float hb = 0.18 + 0.15 * corner;
+                float dcx = bx[k] + W * 0.5 - 0.75;                 // steel door centre (world x)
+                dq(n, d1, sA, -(dcx + 0.43), yf, yf + hb, sA, -(dcx + 0.43), yf, yc1, 2, 2, 0, 0, 0, 0, CORN, ca, LY_CORNER, PT);
+                dq(n, d1, -(dcx - 0.43), sB, yf, yf + hb, -(dcx - 0.43), sB, yf, yc1, 2, 3, 0, 1, 0, 0, CORN, ca, LY_CORNER, PT);
+                dq(n, d1, sA, sB, yc1 - hb * 1.3, yc1, sA, sB, yf + 2.0, yc1, 2, 2 + (k % 2), 0, 0, 1, 0, CORN, ca * 0.8, LY_CORNER, PT);
+                float kcx = bx[k] - (W * 0.5 - 1.3);                 // kitchen window centre (world x)
+                float kends[] = array(-(kcx - 0.66), -(kcx + 0.66));
+                foreach (float ex; kends) {
+                    did++;
+                    if (hr(did, 837, seed) < 0.45 * st * sden * tk) {
+                        streak(n, d1, ex, yf + 0.95, hrange(did, 838, seed, 0.2, 0.35) * swid, hrange(did, 839, seed, 0.3, 0.9) * slen,
+                               3 + (hr(did, 840, seed) < 0.5), hr(did, 841, seed) < 0.5, 0, -kcx - 1.3, -kcx + 1.3, yf, yf + 0.95,
+                               scolor(ct, 1, scol, hr(did, 842, seed), hr(did, 843, seed), SOOT, SOOT2, DAMP, RUST2),
+                               clamp((0.35 + 0.4 * c0) * sint * (0.3 + 0.7 * st) * sstr(did, 844, seed) * 1.6, 0, 0.85), LY_STREAK, FILL, PT);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ================================================================ gables (west -X, east +X)
+{
+    int ends[] = array(0, 1);
+    foreach (int e; ends) {
+        prects(2 + e, pside, pb0, pb1, pf0, pf1, bx, bw, zc, H, PS0, PS1, PY0, PY1);
+        int gbase = 3000000 + e * 100000;
+        did = gbase;
+        vector n = e == 0 ? set(-1, 0, 0) : set(1, 0, 0);
+        float gx = e == 0 ? x0 - 0.2 : x1 + 0.2;
+        float d0 = e == 0 ? -gx : gx;
+        float sA = e == 0 ? zc : -zb, sB = e == 0 ? zb : -zc;      // face s range (s = z west, -z east)
+        float rn = rain[2 + e], sl = fslant(n, wd, X);
+        // (a) runs from the top edge (an eave shelters the top: fewer); fringes only under a parapet
+        float s = sA + hrange(did, 861, seed, 0.05, 0.5);
+        while (s < sB - 0.15) {
+            did++;
+            float zz = e == 0 ? s : -s;
+            float c = cause_at(set(gx, gtop, zz), 2 + e, -1, CZ);
+            int ct = cause_type(set(gx, gtop, zz), 2 + e, CZ);
+            float pe = eave ? 0.55 : 1.0;
+            if (hr(did, 862, seed) < (0.7 + c) * st * sden * rn * pe) {
+                int cell; float vw;
+                float r = hr(did, 863, seed);
+                if (!eave && r < 0.3) { cell = r < 0.15 ? 7 : 8; vw = hrange(did, 865, seed, 0.5, 1.5); }
+                else if (r < 0.55) { cell = int(floor(hr(did, 866, seed) * 2.999)); vw = hrange(did, 865, seed, 0.05, 0.14); }
+                else if (r < 0.8) { cell = r < 0.68 ? 5 : 6; vw = hrange(did, 865, seed, 0.4, 1.4); }
+                else { cell = r < 0.9 ? 11 : 12; vw = hrange(did, 865, seed, 0.5, 1.6); }
+                // a tall end wall carries long runs: median ~1/8 of its height, a tail to the base
+                float l = min(hpow(did, 864, seed, gtop * 0.04, gtop * 0.85, 1.4) * slen, gtop - 0.3);
+                if (hr(did, 914, seed) < stail) l = gtop * hrange(did, 915, seed, 0.6, 0.95);
+                float al = (0.4 + 0.5 * c) * sint * (0.3 + 0.7 * st) * sstr(did, 867, seed) * (0.6 + 0.4 * rn);
+                streak(n, d0, s, gtop - 0.01, vw * swid, l, cell, hr(did, 868, seed) < 0.5, sl, sA, sB, 0, gtop,
+                       scolor(ct, 0, scol, hr(did, 869, seed), hr(did, 870, seed), SOOT, SOOT2, DAMP, RUST2),
+                       clamp(al, 0, 0.9), LY_STREAK, FILL, PT);
+            }
+            s += hpow(did, 871, seed, 0.2, 2.5, 1.4);
+        }
+        // (b) the dark band under the top edge: the darkest band on the building
+        did = gbase + 20000;
+        if (st > 0) {
+            float s0 = sA - 0.3;
+            while (s0 < sB) {
+                did++;
+                float sg = hrange(did, 872, seed, 2.5, 4.5);
+                float bh = hrange(did, 873, seed, 0.3, 0.7) * (eave ? 1.3 : 1.0);
+                dq(n, d0, s0, s0 + sg + 0.3, gtop - bh, gtop, sA, sB, 0, gtop, 2, 6, 0, hr(did, 874, seed) < 0.5, 0, 0,
+                   SOOT, clamp((0.25 + 0.45 * st) * (0.6 + 0.4 * rn) * (eave ? 1.15 : 1.0), 0, 0.85), LY_SOOT, PT);
+                s0 += sg;
+            }
+        }
+        // (c) a washed pale band down the windward vertical corner
+        did = gbase + 30000;
+        {
+            float wz = dot(wd, {0, 0, 1});                         // + : wind from the south
+            float sc = (wz > 0) == (e == 0) ? sB - 0.3 : sA + 0.3; // the windward corner of this gable
+            float wwt = abs(wz) * rn;
+            did++;
+            if (soil > 0.05 && X > 0.2 && wwt > 0.3) {
+                streak(n, d0, sc, gtop, hrange(did, 875, seed, 0.3, 0.5), gtop * hrange(did, 876, seed, 0.6, 0.9), 14, e, 0, sA, sB, 0, gtop,
+                       PALE, clamp(0.35 * X * wwt * min(1.0, soil * 1.5), 0, 0.6), LY_STREAK, FILL, PT);
+            }
+        }
+        // (d) the base: splash band, algae on the north half, a tide mark
+        did = gbase + 40000;
+        {
+            float s0 = sA - 0.2;
+            while (s0 < sB && splash > 0) {
+                did++;
+                float sg = hrange(did, 877, seed, 2.5, 4.5);
+                float hh = splh * hrange(did, 878, seed, 0.8, 1.2) / 0.55;
+                dq(n, d0, s0, s0 + sg + 0.3, -0.02, hh, sA, sB, 0, gtop, 2, hr(did, 879, seed) < 0.5 ? 0 : 1, 0, hr(did, 880, seed) < 0.5, 0, 0,
+                   DIRT, clamp((0.3 + 0.5 * splash) * splash * (0.7 + 0.3 * rn), 0, 0.85), LY_SPLASH, PT);
+                s0 += sg;
+            }
+            did = gbase + 45000;
+            int nb_ = int(rint(bio * 7));
+            for (int i = 0; i < nb_; i++) {
+                did++;
+                float t = pow(hr(did, 881, seed), 1.8);            // toward the north (corridor) corner
+                float bc = e == 0 ? lerp(zc + 0.5, zb - 0.5, t) : lerp(-zc - 0.5, -zb + 0.5, t);
+                float bwid = hrange(did, 882, seed, 0.8, 2.6), bh = hrange(did, 883, seed, 0.6, 1.6);
+                dq(n, d0, bc - bwid * 0.5, bc + bwid * 0.5, -0.05, bh, sA, sB, 0, gtop, 1, 13, 0, hr(did, 884, seed) < 0.5, 0, 0,
+                   lerp(BIO, BIO2, hr(did, 885, seed)), clamp((0.3 + 0.5 * bio) * (1 - 0.6 * t), 0, 0.85), LY_BIO, PT);
+            }
+            did = gbase + 48000;
+            did++;
+            if (hr(did, 886, seed) < efflo * 0.7) {
+                float tc = hrange(did, 887, seed, sA + 1, sB - 3);
+                dq(n, d0, tc, tc + hrange(did, 888, seed, 2, 5), 0.1, hrange(did, 889, seed, 0.9, 1.4), sA, sB, 0, gtop, 2, 7, 0, 0, 0, 0,
+                   EFF, clamp(0.35 * efflo, 0, 0.6), LY_EFFLO, PT);
+            }
+        }
+        // (e) worn vertical corners, broken into runs (windward corner more)
+        did = gbase + 50000;
+        if (wear > 0) {
+            float cs[] = array(sA, sB - 0.045);
+            foreach (int ci; float cx; cs) {
+                float y = hrange(did, 890 + ci, seed, 0.2, 1.5);
+                while (y < gtop - 0.3) {
+                    did++;
+                    float sg = hrange(did, 892, seed, 1.0, 4.0);
+                    if (hr(did, 893, seed) < 0.55)
+                        dq(n, d0, cx, cx + 0.045, y, min(y + sg, gtop), sA, sB, 0, gtop, 2, 4 + (hr(did, 894, seed) < 0.5), 1, 0, 0, 0,
+                           WEAR, clamp(wear * hrange(did, 895, seed, 0.4, 0.8), 0, 0.85), LY_WEAR, PT);
+                    y += sg + hrange(did, 896, seed, 0.5, 3.0);
+                }
+            }
+        }
+    }
+}
+
+// ================================================================ plinth and ground floor: splash band
+{
+    for (int sd = 0; sd < 2; sd++) {
+        prects(sd, pside, pb0, pb1, pf0, pf1, bx, bw, zc, H, PS0, PS1, PY0, PY1);
+        did = 4000000 + sd * 100000;
+        vector n = sd == 0 ? set(0, 0, 1) : set(0, 0, -1);
+        float d0 = sd == 0 ? zb : -zc;
+        float sA = sd == 0 ? x0 : -x1, sB = sd == 0 ? x1 : -x0;
+        float s0 = sA - 0.2;
+        while (s0 < sB && splash > 0) {
+            did++;
+            float sg = hrange(did, 901, seed, 2.5, 4.5);
+            float hh = splh * hrange(did, 902, seed, 0.8, 1.2) / 0.55;
+            int cell = hr(did, 903, seed) < 0.5 ? 0 : 1, fu = hr(did, 904, seed) < 0.5;
+            float al = clamp((0.3 + 0.5 * splash) * splash * (0.7 + 0.3 * rain[sd]), 0, 0.85);
+            dq(n, d0, s0, s0 + sg + 0.3, -0.02, hh, sA, sB, 0, PLINTH, 2, cell, 0, fu, 0, 0, DIRT, al, LY_SPLASH, PT);
+            // the ground-floor fronts on the same plane
+            for (int k = 0; k < len(bt); k++) {
+                if (bt[k] != 0) continue;
+                float xa = bx[k] - bw[k] * 0.5, xb = bx[k] + bw[k] * 0.5;
+                if (sd == 0) {
+                    float sa = xa + rail_w(W);
+                    dq(n, d0, s0, s0 + sg + 0.3, -0.02, hh, sa + 0.012, xb - 0.012, PLINTH - 0.15, PLINTH + 0.95, 2, cell, 0, fu, 0, 0, DIRT, al, LY_SPLASH, PT);
+                    dq(n, d0, s0, s0 + sg + 0.3, -0.02, hh, xa + 0.01, sa - 0.01, PLINTH - 0.15, PLINTH + 0.1, 2, cell, 0, fu, 0, 0, DIRT, al, LY_SPLASH, PT);
+                } else {
+                    dq(n, d0, s0, s0 + sg + 0.3, -0.02, hh, -xb + 0.012, -xa - 0.012, PLINTH - 0.15, PLINTH + 1.1, 2, cell, 0, fu, 0, 0, DIRT, al, LY_SPLASH, PT);
+                }
+            }
+            s0 += sg;
+        }
+        // algae on the north base
+        did = 4000000 + sd * 100000 + 50000;
+        if (sd == 1) {
+            int nb_ = int(rint(bio * L / 8.0));
+            for (int i = 0; i < nb_; i++) {
+                did++;
+                float bc = hrange(did, 905, seed, sA + 1, sB - 1), bwid = hrange(did, 906, seed, 0.8, 2.5);
+                dq(n, d0, bc - bwid * 0.5, bc + bwid * 0.5, -0.05, hrange(did, 907, seed, 0.4, 1.0), sA, sB, 0, PLINTH, 1, 13, 0, hr(did, 908, seed) < 0.5, 0, 0,
+                   lerp(BIO, BIO2, hr(did, 909, seed)), clamp((0.3 + 0.5 * bio), 0, 0.85), LY_BIO, PT);
+            }
+        }
+    }
+}
+
+// ================================================================ stair towers (north face, sides)
+did = 5000000;
+{
+    prects(1, pside, pb0, pb1, pf0, pf1, bx, bw, zc, H, PS0, PS1, PY0, PY1);
+    for (int k = 0; k < len(bt); k++) {
+        if (bt[k] == 0) continue;
+        float cx0 = bx[k] - bw[k] * 0.5, cx1 = bx[k] + bw[k] * 0.5;
+        vector n = {0, 0, -1};
+        float d0 = -(zc - TOWER_D);
+        float sA = -cx1, sB = -cx0;
+        // landing window sill ends: fans down to the next window
+        float wx = bt[k] == 2 ? cx0 + 1.0 : (cx0 + cx1) * 0.5;
+        for (int f = 0; f < floors; f++) {
+            float wy = PLINTH + f * H + H * 0.5 + 0.35;
+            float tk = 1 + stop * pow(f / max(1.0, floors - 1.0), 1.5);
+            for (int sd = -1; sd <= 1; sd += 2) {
+                did++;
+                if (hr(did, 921, seed) < 0.55 * st * sden * rain[1] * tk) {
+                    streak(n, d0, -(wx + sd * 0.47), wy, hrange(did, 922, seed, 0.2, 0.4) * swid, min(slength(did, 923, seed, 0.3, 2.0, slen, stail), wy),
+                           3 + (hr(did, 924, seed) < 0.5), hr(did, 925, seed) < 0.5, 0, sA, sB, 0, ph,
+                           scolor(-1, 1, scol, hr(did, 926, seed), hr(did, 927, seed), SOOT, SOOT2, DAMP, RUST2),
+                           clamp(0.45 * sint * (0.3 + 0.7 * st) * sstr(did, 928, seed) * tk * 1.5, 0, 0.85), LY_STREAK, FILL, PT);
+                }
+            }
+        }
+        // runs from the penthouse fascia
+        float s = sA + 0.1;
+        while (s < sB - 0.1) {
+            did++;
+            if (hr(did, 929, seed) < 0.45 * st * sden * rain[1]) {
+                streak(n, d0, s, ph, hrange(did, 930, seed, 0.06, 0.6), min(slength(did, 931, seed, 0.3, 3.0, slen, stail), ph),
+                       int(floor(hr(did, 932, seed) * 2.999)) + (hr(did, 933, seed) < 0.3 ? 11 : 0), hr(did, 934, seed) < 0.5, 0, sA, sB, 0, ph,
+                       scolor(-1, 1, scol, hr(did, 935, seed), hr(did, 936, seed), SOOT, SOOT2, DAMP, RUST2),
+                       clamp(0.5 * sint * (0.3 + 0.7 * st) * sstr(did, 937, seed) * 1.5, 0, 0.85), LY_STREAK, FILL, PT);
+            }
+            s += hpow(did, 938, seed, 0.2, 1.5, 1.4);
+        }
+        dq(n, d0, sA - 0.2, sB + 0.2, ph - 0.5, ph, sA, sB, 0, ph, 2, 6, 0, 0, 0, 0, SOOT, clamp((0.2 + 0.4 * st) * rain[1], 0, 0.8), LY_SOOT, PT);
+        // splash at the foot, inside corners where the tower meets the corridor
+        if (splash > 0)
+            dq(n, d0, sA - 0.2, sB + 0.2, -0.02, splh / 0.55, sA, sB, 0, ph, 2, k % 2, 0, 0, 0, 0, DIRT, clamp((0.3 + 0.5 * splash) * splash, 0, 0.85), LY_SPLASH, PT);
+        for (int side = 0; side < 2; side++) {
+            vector ns = side == 0 ? set(-1, 0, 0) : set(1, 0, 0);
+            float ds = side == 0 ? -cx0 : cx1;
+            // the side face spans z in [zc - TOWER_D, zc]; the corridor corner is at z = zc
+            float a = side == 0 ? zc - TOWER_D : -zc, b = side == 0 ? zc : -(zc - TOWER_D);
+            float cc = side == 0 ? b - 0.3 : a;                      // strip next to the corner
+            dq(ns, ds, cc, cc + 0.3, 0, ph, a, b, 0, ph, 2, 2 + side, 1, 0, side == 0 ? 1 : 0, 0, CORN,
+               clamp(corner * 0.6, 0, 0.85), LY_CORNER, PT);
+            if (splash > 0)
+                dq(ns, ds, a - 0.2, b + 0.2, -0.02, splh / 0.55, a, b, 0, ph, 2, side, 0, 0, 0, 0, DIRT, clamp((0.3 + 0.5 * splash) * splash, 0, 0.85), LY_SPLASH, PT);
+        }
+    }
+}
+
+// ================================================================ stain fields
+// Each field = 3-6 layered blotches (10-45 % each) clipped to every face rect it crosses, so one
+// stain continues across the parapet bands as if over a single plane.
+{
+    for (int fam = 0; fam < 4; fam++) {
+        // fam 0 south, 1 north, 2 west gable, 3 east gable
+        prects(fam, pside, pb0, pb1, pf0, pf1, bx, bw, zc, H, PS0, PS1, PY0, PY1);
+        did = 6000000 + fam * 100000;
+        vector n; float d0, sA, sB, ftop;
+        if (fam == 0) { n = set(0, 0, 1); d0 = zb; sA = x0; sB = x1; ftop = ytop; }
+        else if (fam == 1) { n = set(0, 0, -1); d0 = -zc; sA = -x1; sB = -x0; ftop = ytop + 0.2; }
+        else if (fam == 2) { n = set(-1, 0, 0); d0 = -(x0 - 0.2); sA = zc; sB = zb; ftop = gtop; }
+        else { n = set(1, 0, 0); d0 = x1 + 0.2; sA = -zb; sB = -zc; ftop = gtop; }
+        // face rects of this family
+        float r0[], r1[], q0[], q1[];
+        if (fam < 2) {
+            for (int k = 0; k < len(bt); k++) {
+                if (bt[k] != 0) continue;
+                float xa = bx[k] - bw[k] * 0.5, xb = bx[k] + bw[k] * 0.5, sa = xa + rail_w(W);
+                for (int f = 0; f < floors; f++) {
+                    float yf = PLINTH + f * H;
+                    if (fam == 0) {
+                        append(r0, sa + 0.012); append(r1, xb - 0.012); append(q0, yf - 0.15); append(q1, yf + 0.95);
+                        append(r0, xa + 0.01); append(r1, sa - 0.01); append(q0, yf - 0.15); append(q1, yf + 0.1);
+                    } else {
+                        append(r0, -xb + 0.012); append(r1, -xa - 0.012); append(q0, yf - 0.15); append(q1, yf + 1.1);
+                    }
+                }
+            }
+            append(r0, sA); append(r1, sB); append(q0, 0); append(q1, PLINTH);
+        } else {
+            append(r0, sA); append(r1, sB); append(q0, 0); append(q1, gtop);
+        }
+        // field centres: causes, the top band, the ends, a faint background
+        float fc[], fy[], fw[], fh[], fs[]; int fk[];
+        for (int i = 0; i < len(cP); i++) {
+            if (cSide[i] != fam || cT[i] == 3) continue;
+            float s = fam == 0 ? cP[i].x : fam == 1 ? -cP[i].x : fam == 2 ? cP[i].z : -cP[i].z;
+            // a stain hangs from its source: its top at the cause, reaching down
+            float hh = cR[i] * 1.6;
+            append(fc, s); append(fy, cP[i].y - hh * 0.35); append(fw, cR[i] * 1.3); append(fh, hh);
+            append(fs, cS[i] * (fam >= 2 ? 0.7 : 1.0)); append(fk, cT[i] == 0 ? 2 : 1);
+        }
+        int ntop = fam < 2 ? int(rint(L / 14.0)) : 3;
+        for (int i = 0; i < ntop; i++) {
+            did++;
+            float rf = rain[fam];
+            if (hr(did, 951, seed) > 0.35 + 0.4 * rf) continue;
+            float w = hrange(did, 952, seed, 2.5, 5.5);
+            float h = hrange(did, 953, seed, 2.0, 4.5);
+            append(fc, lerp(sA + w * 0.3, sB - w * 0.3, (i + hr(did, 954, seed)) / ntop)); append(fy, ftop - h * 0.4);
+            append(fw, w); append(fh, h); append(fs, hrange(did, 955, seed, 0.6, 1.0) * min(rf, 1.3)); append(fk, 1);
+        }
+        if (fam < 2) {
+            for (int e = 0; e < 2; e++) {
+                did++;
+                if (hr(did, 956, seed) < 0.6) {
+                    float w = hrange(did, 957, seed, 3, 6);
+                    append(fc, e == 0 ? sA + w * 0.4 : sB - w * 0.4); append(fy, hrange(did, 958, seed, ftop * 0.4, ftop * 0.9));
+                    append(fw, w); append(fh, hrange(did, 959, seed, 4, 9)); append(fs, hrange(did, 960, seed, 0.5, 0.9)); append(fk, 0);
+                }
+            }
+        } else {
+            // the windward top corner of a gable is wetted most
+            did++;
+            float wz = dot(wd, {0, 0, 1});
+            float sc = (wz > 0) == (fam == 2) ? sB - 2.0 : sA + 2.0;
+            append(fc, sc); append(fy, ftop - 3.0); append(fw, hrange(did, 961, seed, 3, 5)); append(fh, hrange(did, 962, seed, 4, 8));
+            append(fs, clamp(abs(wz) * rain[fam], 0.3, 1.0)); append(fk, 1);
+        }
+        int nbg = int(rint((sB - sA) * ftop / 60.0));
+        for (int i = 0; i < nbg; i++) {
+            did++;
+            // on an end wall a background stain is a tall wash hanging from higher up, never a
+            // round blot in mid-wall (no source); on the banded long faces round mottles are fine
+            float w = hrange(did, 965, seed, 1.5, 4), h = fam >= 2 ? w * hrange(did, 966, seed, 1.5, 3.0) : hrange(did, 966, seed, 1.5, 4);
+            append(fc, hrange(did, 963, seed, sA, sB)); append(fy, hrange(did, 964, seed, max(1.0, ftop * 0.35), ftop - 1.0));
+            append(fw, w); append(fh, h); append(fs, hrange(did, 967, seed, 0.3, 0.6) * (fam >= 2 ? 0.7 : 1.0)); append(fk, fam >= 2 ? 1 : 0);
+        }
+        // emit the layers
+        for (int fi = 0; fi < len(fc); fi++) {
+            did++;
+            int nl = 3 + int(floor(hr(did, 970, seed) * 3.999));
+            for (int l = 0; l < nl; l++) {
+                did++;
+                float sc_ = sscale * hrange(did, 971, seed, 0.6, 1.1);
+                float w = fw[fi] * sc_, h = fh[fi] * sc_;
+                float cs = fc[fi] + hrange(did, 972, seed, -0.25, 0.25) * fw[fi];
+                float cy = fy[fi] + hrange(did, 973, seed, -0.2, 0.2) * fh[fi];
+                int cell;
+                if (fk[fi] == 1) cell = 2 + (hr(did, 974, seed) < 0.5);                     // hanging from the top
+                else if (fk[fi] == 2) cell = hr(did, 974, seed) < 0.5 ? 4 : 5;              // leak: mottle with holes
+                else cell = int(floor(hr(did, 974, seed) * 1.999)) + (hr(did, 975, seed) < 0.3 ? 4 : 0);
+                if (fam == 0 && hr(did, 976, seed) < 0.15) cell = 11;                      // soot cloud
+                // older soiling builds up: layers get denser with soiling squared
+                float al = clamp(hrange(did, 977, seed, 0.15, 0.55) * stain * fs[fi] * (0.6 + 0.8 * soil * soil), 0, 0.75);
+                vector col = lerp(STAINC, SOOT, hr(did, 978, seed) * 0.6);
+                if ((fam == 1 || fk[fi] == 2) && hr(did, 979, seed) < 0.3 + 0.4 * scol) col = lerp(col, DAMP, 0.5);
+                int fu = hr(did, 980, seed) < 0.5;
+                float s0 = cs - w * 0.5, s1 = cs + w * 0.5, y0 = cy - h * 0.5, y1 = cy + h * 0.5;
+                for (int q = 0; q < len(r0); q++) {
+                    if (r1[q] <= s0 || r0[q] >= s1 || q1[q] <= y0 || q0[q] >= y1) continue;
+                    dq(n, d0, s0, s1, y0, y1, r0[q], r1[q], q0[q], q1[q], 1, cell, 0, fu, 0, 0, col, al, LY_STAIN, PT);
+                }
+            }
+        }
+    }
+}
+}
+setdetailattrib(0, "n_decal_sources", did);

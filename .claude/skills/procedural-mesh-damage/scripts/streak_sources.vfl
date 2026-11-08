@@ -1,0 +1,216 @@
+// streak_sources.vfl: Attribute Wrangle, Run Over: Detail.
+// Where run-off streaks START: the environment gathers at edges and trails down from them.
+// Sources are (a) ground-parallel convex TOP edges, in clustered runs with gaps, (b) the
+// ends of those edges (water runs along a coping or sill and drips off its end), and (c)
+// the LOWER LIP of every chip, divot and pit on a vertical face: a chip is a small edge
+// on the surface, it catches dirt and water and releases it at its lowest point.
+//
+// Input 0: the damaged piece with the cut-face prim group "cut" (Boolean binsidea) and
+//          prim i@island (Connectivity, prim, include group "cut").
+// Input 1: the clean low-poly pre-bevel piece (top edges).
+// Input 2: mask carrier from cluster_mask.vfl (f@damage_mask), optional.
+// Output: one point per source with v@N (the face the streak runs down), f@w (half width,
+//   m), f@len (length, m), f@str (0-1), i@stype (0 top edge, 1 edge end, 2 lip),
+//   f@fan (widening half-angle, deg), i@island (lip sources); detail i@n_top, i@n_end,
+//   i@n_lip, i@lip_islands, i@vert_islands, and the top edges without a drip as
+//   v[]@top_A, v[]@top_B, v[]@top_N (streak_mask.vfl draws the dark band under them).
+//   Shapes follow the photo study: top fringe streaks 0.5-3 cm wide, 20-30 % of sources
+//   dominant; edge-end streaks 3-8 cm wide at the source, fanning at 10-20 deg.
+//
+// Spare parms:
+//   top_spacing  float  source spacing along top edges (m), e.g. 0.035
+//   top_keep     float  base keep along top edges, e.g. 0.55; x (0.4 + damage_mask)
+//   gap_freq     float  frequency of the gaps (1/m), e.g. 2.2
+//   catch_k      float  streak length = catch_k * sqrt(catchment area, m2): water caught
+//                       above a source sets how far it runs; 2.5 gives ~1 m below a
+//                       1 m x 0.15 m sill, e.g. 2.5
+//   len_max      float  cap on any streak length (m), e.g. 1.6
+//   drip         int    1 = the top edges have a drip groove: no fringe, no band
+//   end_len_mult float  length multiplier at edge ends, e.g. 1.5
+//   lip_tol      float  lip band above the island's lowest point, fraction of its height,
+//                       e.g. 0.18
+//   lip_face     float  run-off share of the face above a lip that the lip collects, e.g.
+//                       0.03 (catchment = island area + lip_face * lip width * height above)
+//   lip_min      float  smallest chip that releases a streak, sqrt(cut area) (m), e.g. 0.01
+//   min_angle    float  e.g. 30
+//   seed         int
+
+function int add_src(vector P; vector N; float w; float L; float s; int ty; int isl;
+                     float fan) {
+    int pt = addpoint(0, P);
+    setpointattrib(0, "N", pt, N);
+    setpointattrib(0, "w", pt, w);
+    setpointattrib(0, "len", pt, L);
+    setpointattrib(0, "str", pt, s);
+    setpointattrib(0, "stype", pt, ty);
+    setpointattrib(0, "island", pt, isl);
+    setpointattrib(0, "fan", pt, fan);
+    return pt;
+}
+
+// streak lengths follow a power law: Pareto(alpha 1.5) multiplier with median 1,
+// clamped to [0.35, 4] (most short, a 5 % tail about 3x the median)
+function float len_mult(float u) {
+    return clamp(pow(max(1.0 - u, 1e-3), -1.0 / 1.5) / 1.587, 0.35, 4.0);
+}
+
+int seed = chi("seed");
+vector off = vector(rand(set(seed, 77, 3))) * 40.0;
+int has_mask = npoints(2) > 0 && haspointattrib(2, "damage_mask");
+int n_top = 0, n_end = 0, n_lip = 0;
+
+
+// ---- (a, b) top edges of the clean piece -------------------------------------------
+float tsp = max(chf("top_spacing"), 0.005), tkeep = chf("top_keep"), gf = chf("gap_freq");
+float ck = chf("catch_k"), lmax_all = chf("len_max"), endm = chf("end_len_mult");
+int drip = chi("drip");
+vector topA[], topB[], topN[];
+vector b1min, b1max;
+getbbox(1, b1min, b1max);
+float dtop_max = 0;
+for (int he = 0; he < nvertices(1); he++) {
+    if (!hedge_isprimary(1, he)) continue;
+    int pa = hedge_prim(1, he);
+    int pb = hedge_prim(1, hedge_nextequiv(1, he));
+    if (pa == pb || pb < 0) continue;
+    vector na = prim_normal(1, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(1, pb, {0.5, 0.5, 0});
+    vector ca = prim(1, "P", pa), cb = prim(1, "P", pb);
+    if (dot(na, cb - ca) >= 0) continue;
+    if (degrees(acos(clamp(dot(na, nb), -1.0, 1.0))) < chf("min_angle")) continue;
+    vector A = point(1, "P", hedge_srcpoint(1, he)), B = point(1, "P", hedge_dstpoint(1, he));
+    vector T = normalize(B - A);
+    if (abs(T.y) > 0.3 || max(na.y, nb.y) < 0.7) continue;       // top edges only
+    vector Nv = na.y > nb.y ? nb : na;                              // the face below
+    if (abs(Nv.y) > 0.5) continue;
+    float Le = distance(A, B);
+    // drainage depth: the top face drains to its edges; half its depth behind this edge
+    int ptop = na.y > nb.y ? pa : pb;
+    float D = abs(dot(vector(prim(1, "P", ptop)) - A, Nv));
+    dtop_max = max(dtop_max, D);
+    if (!drip) { push(topA, A); push(topB, B); push(topN, Nv); }
+    int n = max(1, int(Le / tsp));
+    for (int i = 0; i < n; i++) {
+        float u = (i + 0.5 + 0.6 * (rand(set(he, i, seed, 1)) - 0.5)) / n;
+        vector P = lerp(A, B, u);
+        float m = 0.3;
+        if (has_mask) { int hp; vector huv; xyzdist(2, P, hp, huv); m = primuv(2, "damage_mask", hp, huv); }
+        // gaps: low-frequency noise along the edge, so streaks come in clustered runs
+        float g = smooth(0.42, 0.62, noise(P * gf + off));
+        float keep = tkeep * (0.4 + m) * g;
+        if (drip || rand(set(he, i, seed, 2)) > keep) continue;
+        // a source drains the edge length around it (spacing / keep) times the depth D
+        float catchm = D * tsp / max(keep, 0.05);
+        float L = min(ck * sqrt(catchm) * len_mult(rand(set(he, i, seed, 3))), lmax_all);
+        // 20-30 % of the sources dominate
+        float s = rand(set(he, i, seed, 4)) < 0.25 ? fit01(rand(set(he, i, seed, 6)), 0.8, 1.0)
+                                                  : fit01(rand(set(he, i, seed, 6)), 0.35, 0.6);
+        float w = fit01(pow(rand(set(he, i, seed, 5)), 2.0), 0.0025, 0.015);
+        add_src(P - Nv * 0.001, Nv, w, L, s, 0, -1, 1.0);
+        n_top++;
+    }
+    // edge ends: where the top edge meets a vertical edge (a corner): strong, wide drip
+    vector ends[] = array(A, B);
+    foreach (vector E; ends) {
+        vector inward = normalize((A + B) * 0.5 - E);
+        vector P = E + inward * 0.04;
+        float catchm = D * min(0.5 * Le, 0.6) * endm;
+        float w = fit01(rand(set(he, seed, 7, E.x + E.z)), 0.015, 0.04);
+        add_src(P - Nv * 0.001, Nv, w, min(ck * sqrt(catchm), min(lmax_all, 1.5)), 1.0, 1, -1,
+                fit01(rand(set(he, seed, 8, E.x + E.z)), 10.0, 20.0));
+        n_end++;
+    }
+}
+
+// ---- (c) lower lips of chips, divots and pits --------------------------------------
+int nisl = 0;
+for (int p = 0; p < nprimitives(0); p++) nisl = max(nisl, prim(0, "island", p) + 1);
+float ymin[]; resize(ymin, nisl);
+float ymax[]; resize(ymax, nisl);
+float iarea[]; resize(iarea, nisl);
+int vert[]; resize(vert, nisl);
+for (int i = 0; i < nisl; i++) { ymin[i] = 1e9; ymax[i] = -1e9; }
+for (int p = 0; p < nprimitives(0); p++) {
+    int is = prim(0, "island", p);
+    if (is < 0) continue;
+    iarea[is] += primintrinsic(0, "measuredarea", p);
+    foreach (int pt; primpoints(0, p)) {
+        float y = vector(point(0, "P", pt)).y;
+        ymin[is] = min(ymin[is], y); ymax[is] = max(ymax[is], y);
+    }
+}
+// boundary edges between an island and a non-cut, near-vertical face
+float ltol = chf("lip_tol"), lface = chf("lip_face");
+// accumulate per island and per face direction (up to 3 directions per island)
+vector accP[], accN[];
+float accW[], accX0[], accX1[];
+int accI[];
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int pa = hedge_prim(0, he);
+    int pb = hedge_prim(0, hedge_nextequiv(0, he));
+    if (pa == pb || pb < 0) continue;
+    int ia = prim(0, "island", pa), ib = prim(0, "island", pb);
+    if ((ia < 0) == (ib < 0)) continue;
+    int is = ia >= 0 ? ia : ib;
+    int other = ia >= 0 ? pb : pa;
+    vector N = prim_normal(0, other, {0.33, 0.33, 0});
+    if (abs(N.y) > 0.5) continue;
+    vert[is] = 1;
+    vector P0 = point(0, "P", hedge_srcpoint(0, he)), P1 = point(0, "P", hedge_dstpoint(0, he));
+    vector M = (P0 + P1) * 0.5;
+    float h = max(ymax[is] - ymin[is], 0.005);
+    if (M.y > ymin[is] + ltol * h + 0.002) continue;      // not on the lower lip
+    // the face must continue BELOW the lip (water leaves the chip onto it)
+    if (dot(normalize(vector(prim(0, "P", other)) - M), {0, -1, 0}) < -0.2 &&
+        vector(prim(0, "P", other)).y > M.y) continue;
+    vector th = normalize(cross(N, {0, 1, 0}));
+    float x0 = min(dot(P0, th), dot(P1, th)), x1 = max(dot(P0, th), dot(P1, th));
+    float wgt = distance(P0, P1);
+    int slot = -1;
+    for (int k = 0; k < len(accI); k++)
+        if (accI[k] == is && dot(accN[k], N) > 0.9) { slot = k; break; }
+    if (slot < 0) {
+        push(accI, is); push(accN, N); push(accP, M * wgt); push(accW, wgt);
+        push(accX0, x0); push(accX1, x1);
+    } else {
+        accP[slot] += M * wgt; accW[slot] += wgt;
+        accX0[slot] = min(accX0[slot], x0); accX1[slot] = max(accX1[slot], x1);
+    }
+}
+int lip_isl[];
+resize(lip_isl, nisl);
+for (int k = 0; k < len(accI); k++) {
+    int is = accI[k];
+    if (sqrt(iarea[is]) < chf("lip_min")) continue;   // only chips and recesses > ~1 cm
+    vector P = accP[k] / max(accW[k], 1e-9);
+    float size = sqrt(iarea[is]);
+    // the head is the width of the lip, at least a fraction of the chip's size
+    float w = clamp(0.5 * (accX1[k] - accX0[k]), max(0.15 * size, 0.004), max(0.3 * size, 0.004));
+    float catchm = iarea[is] + lface * 2.0 * w * max(b1max.y - ymax[is], 0.0);
+    float s = clamp(0.35 + 4.0 * size, 0.35, 1.0);
+    // a chip in a top arris is that edge's low point: the top face drains into it
+    if (ymax[is] > b1max.y - 0.005) { catchm += dtop_max * 6.0 * w; s = 1.0; }
+    float L = min(ck * sqrt(catchm), lmax_all);
+    add_src(P - accN[k] * 0.001, accN[k], w, L, s, 2, is, 8.0);
+    n_lip++;
+    lip_isl[is] = 1;
+}
+int nl = 0, nv = 0;
+int nbig = 0;   // chips on a vertical face big enough to release a streak
+for (int i = 0; i < nisl; i++) {
+    nl += lip_isl[i]; nv += vert[i];
+    nbig += vert[i] && sqrt(iarea[i]) >= chf("lip_min");
+}
+setdetailattrib(0, "lip_eligible_islands", nbig);
+for (int p = nprimitives(0) - 1; p >= 0; p--) removeprim(0, p, 1);
+// keep only the source points (the piece's own points are not referenced by sources)
+int npts = npoints(0);
+setdetailattrib(0, "n_top", n_top);
+setdetailattrib(0, "n_end", n_end);
+setdetailattrib(0, "n_lip", n_lip);
+setdetailattrib(0, "lip_islands", nl);
+setdetailattrib(0, "vert_islands", nv);
+setdetailattrib(0, "top_A", topA);
+setdetailattrib(0, "top_B", topB);
+setdetailattrib(0, "top_N", topN);

@@ -73,6 +73,38 @@ Houdini 21.
 Always prove an export: re-import it into a fresh scene and render it with only its own
 textures, and check triangle counts, UV sets, material slots and collision names.
 
+## Validate every export (`asset_check`)
+
+Studios validate on save and in CI (Unreal's Data Validation commandlet, Allar's style rules,
+Pyblish validators). Run a validator after every export, over the preset strip and at least 4 seeds,
+reading the asset's `spec.json` (research `docs/redesign/research/pro-asset-pipeline.md` §4 #1-2).
+It fails when:
+- texel density measured from the UVs (√(UV area × texture pixels ÷ world area), with the world-UV
+  tile sizes the shader uses) is under 0.5× its class target anywhere, or under 90 % of the area
+  within ±25 % of it;
+- material slots or triangles exceed the spec at the heaviest preset (danchi's LOD1 reached 99,946
+  of a 100k cap at age 60 and upkeep 0.1, because its decals grow with weathering);
+- a Nanite mesh has 2 or more vertices per triangle (warn above 1);
+- a texture side is not a power of two (streamed) or not a multiple of 4 (block compression);
+- UV1 or UV2 overlap, or have under 2 texels of padding at the lowest lightmap resolution, when the
+  spec asks for lightmaps;
+- either engine's collision names are missing, or mesh and slot names changed without a version bump;
+- the bounding box differs from the contract by more than 1 cm.
+
+## Two builds from one plan
+
+| | Unreal 5 with Nanite | Godot 4 |
+|---|---|---|
+| Kit pieces | Nanite meshes, no LOD chain | authored LOD1 and LOD2 on visibility ranges (fade off, 2-5 m margin), Generate LODs off where edges must meet |
+| Glass, decals, translucent | separate non-Nanite meshes | Decal nodes for hero marks (Forward+ and Mobile only), mesh decals otherwise |
+| Distance | World Partition HLOD (instancing near, simplified mesh far) | Visibility Parent pointing at a merged building HLOD |
+| Instances | instanced static meshes, per-instance custom data | one MultiMesh per piece type per facade (Mobile, Compatibility) or MeshInstance3D (Forward+ auto-instances) |
+| Collision, occlusion | `UCX_` hulls | `-colonly` primitives per slab tier and balcony line; `-occonly` closed boxes inset 0.3 m behind each facade |
+| Lightmaps | off under Lumen | UV2 per piece if the renderer needs LightmapGI (Mobile, Compatibility) |
+
+Name the Godot renderer in the brief: Compatibility has no Decal nodes, Mobile has only LightmapGI,
+and only Forward+ auto-instances.
+
 ## Sources
 
 - Houdini Engine for Unreal, instancing: https://www.sidefx.com/docs/houdini/unreal/instancing.html

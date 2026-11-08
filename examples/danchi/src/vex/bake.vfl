@@ -1,0 +1,107 @@
+// bake.vfl — vertex wrangle at the end of the chain (round 7). Input 1 = causes (plan, w_*
+// weathering values, cause field). Writes the engine-ready vertex colour: Cd (RGB) and Alpha.
+// - painted walls: paint (assign: scheme x per-bay tint x repaint patch) darkened toward soot by
+//   a grime field: background greying, sheltered undersides and recesses, lee faces, the band
+//   under the roof edge, the base, the slab-edge line, cause hotspots, worse columns of flats;
+//   freshly repainted patches stay cleaner; the south faces chalk (paler, less chroma).
+//   (The lighter substrate around chips is a decal, not vertex colour.)
+// - white steel rails, post plates, doors, the tank stand: rust where water sits.
+// - decals: Cd and Alpha from the decal (opacity).
+// Alpha is 1 on everything that is not a decal. Written as vertex vcol/valpha: the next nodes
+// delete the prim Cd/Alpha and rename these to Cd/Alpha (a vertex wrangle cannot replace a prim
+// attribute of the same name).
+
+int pr = @primnum;
+string mat = prim(0, "mat", pr);
+string key = prim(0, "cdkey", pr);
+vector cd = prim(0, "Cd", pr);
+float alpha = 1.0;
+vector P = @P;
+float y = P.y;
+int seed = detail(1, "w_seed");
+
+if (mat == "decal") {
+    alpha = prim(0, "Alpha", pr);
+}
+else {
+    float soot = detail(1, "w_soot"), soil = detail(1, "w_soil"), rust = detail(1, "w_rust"), wear = detail(1, "w_wear");
+    float ytop = detail(1, "ytop"), H = detail(1, "H");
+    vector N = prim_normal(0, pr, {0.5, 0.5, 0});
+    if (mat == "paint_ext" || mat == "coping" || mat == "soffit") {
+        float rain[] = detail(1, "w_rain");
+        float lee[] = detail(1, "w_lee");
+        vector cP[] = detail(1, "cause_P");
+        float cR[] = detail(1, "cause_r");
+        float cS[] = detail(1, "cause_s");
+        int cT[] = detail(1, "cause_t");
+        int face = -1;
+        if (abs(N.y) < 0.5) face = abs(N.z) > abs(N.x) ? (N.z > 0 ? 0 : 1) : (N.x < 0 ? 2 : 3);
+        string role = prim(0, "role", pr);
+        int side = prim(0, "side", pr);
+        float g = 0.18 * soot;                                         // everything greys a little with age
+        if (N.y < -0.5) g += 0.35 * soot + 0.08 * soil;                // undersides keep the crust
+        if (role == "wall") g += side == 1 ? 0.22 * soot : 0.15 * soot;  // recessed walls, corridor walls
+        if (face >= 0) {
+            g += 0.18 * soot * lee[face];                               // lee: dust and soot settle
+            g -= 0.06 * soil * max(0.0, rain[face] - 1.0);              // windward: washed a little paler
+        }
+        g += 0.3 * soot * smooth(ytop - 3.0, ytop + 0.6, y) * (face >= 0);    // band under the roof edge
+        if (role == "front") g += 0.06 * soot;                          // balcony and corridor fronts: traffic soot
+        // gables and stair towers: rain-wash columns from the top edge (1-4 m wavelength across the
+        // face, strongest at the top, fading down), on the gridded faces
+        if ((prim(0, "gable", pr) > 0 || prim(0, "tower", pr) > 0) && face >= 0) {
+            float u = face >= 2 ? P.z : P.x;
+            float n1 = noise(set(u * 0.55 + seed * 0.37, 0.5, 0.25));
+            float n2 = noise(set(u * 1.7 + seed, 1.5, 0.75));
+            float col = n1 * 0.6 + n2 * 0.4;
+            float down = smooth(0.0, ytop, y);
+            g += 0.55 * soot * smooth(0.45, 0.75, col) * (0.35 + 0.65 * down) * rain[face];
+        }
+        g += 0.22 * soot * smooth(1.4, 0.0, y);                         // base
+        g += 0.55 * soot * point(0, "edge_grime", @ptnum);              // slab edge line
+        float c = 0;
+        for (int i = 0; i < len(cP); i++) {
+            if (cT[i] == 3 && y > 2.0) continue;                       // impacts act near the ground
+            c = max(c, cS[i] * smooth(1.0, 0.2, length(P - cP[i]) / cR[i]));
+        }
+        g += 0.4 * soot * c;
+        float cn = prim(0, "colneglect", pr);
+        if (role != "") g *= 0.75 + 0.5 * cn;                          // 1-2 columns of flats in 5 much worse
+        if (prim(0, "fresh", pr)) g *= 1 - 0.7 * detail(1, "w_pcon");  // newer paint is cleaner
+        // chips: the worn, lighter substrate around a spall is a decal (decals.vfl, "chips on the
+        // damaged fronts"). Lifting the vertex colour by the hotspot halo smeared into light
+        // wedges along the long triangles of the chipped fronts and cleaned the soot around them.
+        // south faces chalk in the sun: paler, less chroma
+        if (face == 0) {
+            float lum = luminance(cd);
+            cd = lerp(cd, set(lum, lum, lum), 0.18 * soil) * (1 + 0.03 * soil);
+        }
+        // horizontal tops (parapet tops, copings) collect dust (round 6 did this in the coping shader)
+        if (N.y > 0.5) cd = lerp(cd, {0.33, 0.30, 0.26}, 0.08 + 0.25 * soil);
+        vector SOOTC = {0.16, 0.15, 0.13};
+        cd = lerp(cd, SOOTC, clamp(g, 0, 0.75));
+    }
+    else if (mat == "steel" && (key == "rail" || key == "stand" || key == "door" || key == "door2")) {
+        int fl = prim(0, "floor", pr);
+        float yl = key == "stand" ? y - (ytop + 2.95) : y - (PLINTH + fl * H);
+        vector RUSTC = {0.30, 0.15, 0.07};
+        int b = prim(0, "bay", pr);
+        float bayk = hr(b * 31 + fl * 7 + prim(0, "side", pr), 77, seed) < 0.3 + 0.7 * rust ? 1.0 : 0.25;
+        float k = 0;
+        if (key == "rail") {
+            k = rust * 0.75 * smooth(0.35, 0.05, yl);                   // post and baluster feet
+            if (N.y > 0.7 && yl > 1.0) k = max(k, rust * 0.55 * hr(pr, 78, seed));   // top-rail tops
+            if (prim(0, "rustsrc", pr)) k = max(k, rust * 0.9);          // post base plates
+        }
+        else if (key == "stand") k = rust * 0.6 * smooth(1.2, 0.0, yl) + rust * 0.25;
+        else k = rust * 0.45 * smooth(0.3, 0.0, yl);                    // door bottoms
+        cd = lerp(cd, RUSTC, clamp(k * bayk, 0, 0.85));
+    }
+}
+// LOD value match: LOD1 has no props and fewer decals, LOD2 is a banded shell with no decals;
+// spare parms lod1_k / lod2_k scale their albedo so the mean facade value matches LOD0 at
+// distance (calibrated with renders at 170 m, README "LOD value match")
+int lodn = prim(0, "lod", pr);
+if (mat != "decal" && lodn > 0) cd *= lodn == 1 ? chf("lod1_k") : chf("lod2_k");
+v@vcol = cd;
+f@valpha = alpha;

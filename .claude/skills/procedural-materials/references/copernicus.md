@@ -45,9 +45,11 @@ SideFX ships this mapping in its help ("Copernicus for Substance Designer users"
 
 **Noise** (all tile by default: `dotiled`, `tilesize` (2,2))
 - `fractalnoise`: `noisetype` (torus, perlin, worleyA, worleyB, white, alligator, sparse),
-  `elementsize`, `oct`, `rough`, `amp`, `center`.
+  `elementsize`, `elementsizetype` (1 = per-component; `elementscale` is ignored without it),
+  `elementscale`, `oct`, `rough`, `amp`, `center`. Its output around 0.5 has a std of about
+  0.076 (p1–p99 0.31–0.70), less at large element sizes.
 - `worleynoise` (outputs dist1, dist2, border, center, id; `elementsize`, `jitter`),
-  `cellularnoise` (`gap`, `bevel`), `crystalnoise`, `bubblenoise` (`droop`), `phasornoise`,
+  `cellularnoise` (`smoothedge`, `gap`, `bevel`, `mode`), `crystalnoise`, `bubblenoise` (`droop`), `phasornoise`,
   `curlnoise`.
 
 **Grunge** (each has `elementsize`, `seed`, `dotiled`): `grunge_leakingstreaks`,
@@ -57,7 +59,7 @@ SideFX ships this mapping in its help ("Copernicus for Substance Designer users"
 
 **Filters and warps:** `blur` (`units` image, pixels, local; `size_pixel`), `distort` (`dir`
 input, `scale`, `streak` off, on, min, max, `dirtype`), `streakblur` (`dirtype`, `dir`,
-`length`), `slopedir`, `feather` (`direction`, `unitdist`, `includeborder`), `dilateerode`,
+`length`, `bias`: 0 centred, 1 one-sided along `dir`), `slopedir`, `feather` (`direction`, `unitdist`, `includeborder`), `dilateerode`,
 `edgedetect`, `sharpen`, `median`, `smoothfill`, `extrapolateboundaries`, `xform2d`, `mirror`,
 `crop`, `resample`.
 
@@ -87,13 +89,14 @@ sphere, box or shaderball). The `output` COP is a network output, not a file wri
 
 ## Per-material recipes
 
-**Board-formed concrete** (`build_concrete_panels`): stackbond panels with a small `inset`
+**Board-formed concrete** (`build_concrete_panels`; the fuller formed and spray-coat recipes
+are in [concrete.md](concrete.md)): stackbond panels with a small `inset`
 and varying value, 2 px blur on seams; tie holes as a second tilepattern of gradient circles
 subtracted; broad `fractalnoise` (elementsize ~0.6) at ~15 %; pitting from `worleynoise`
 dist1 → `remap` → `invert`, masked by low-frequency noise; fine grain at ~3 %; leaks by
-`streakblur` of the tie holes (downward, coord mode) max `grunge_leakingstreaks`; colour ramp
+`streakblur` of the tie holes (downward: coord mode, `bias` 1) max `grunge_leakingstreaks`; colour ramp
 0.18–0.52 linear darkened by AO and stains; roughness 0.95 → 0.72 in stains. Add formwork
-wood grain with a stretched `fractalnoise` (`elementscale` like (1, 0.05)) or `phasornoise`
+wood grain with a stretched `fractalnoise` (`elementsizetype` 1, `elementscale` like (1, 0.05)) or `phasornoise`
 (not yet tested).
 
 **Painted steel** (`build_painted_steel`): 2×2 panels with blurred seams; rivets as

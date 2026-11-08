@@ -1,0 +1,46 @@
+// causes.vfl — detail wrangle on the plan. The building's "stories": a few cause hotspots per
+// facade that every weathering layer reads (decal density and strength, point grime).
+// Types: 0 leak (stain + streaks + damp), 1 rust (rail and fixing rust), 2 neglect (a dirty
+// column of flats), 3 impact (scuffs and chips near the ground at a corner). Input 0 is
+// weather_params (the plan plus the w_* weathering values).
+int seed = detail(0, "w_seed");     // round 7: the weathering seed (building seed folded in)
+float L = detail(0, "L"), x0 = detail(0, "x0"), ytop = detail(0, "ytop"), H = detail(0, "H");
+int floors = detail(0, "floors");
+float bx[] = detail(0, "bay_x");
+int bt[] = detail(0, "bay_t");
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W);
+vector cP[]; float cR[]; float cS[]; int cT[]; int cSide[];
+int id = 0;
+for (int side = 0; side < 4; side++) {
+    int n = 3 + int(floor(hr(seed * 4 + side, 601, 1) * 4.999));      // 3-7 stories per facade
+    if (side >= 2) n = 1 + int(floor(hr(seed * 4 + side, 602, 1) * 2.999)); // gables: 1-3
+    for (int k = 0; k < n; k++) {
+        id++;
+        float r1 = hr(id, 603, seed), r2 = hr(id, 604, seed), r3 = hr(id, 605, seed);
+        int t = r1 < 0.35 ? 0 : r1 < 0.6 ? 1 : r1 < 0.85 ? 2 : 3;
+        vector p; float rad, str;
+        if (side < 2) {
+            // pick a unit bay; leaks and neglect sit on a column over a few floors
+            int kk = int(floor(r2 * len(bx)));
+            if (bt[kk] != 0) kk = max(0, kk - 1);
+            float y = t == 3 ? 0.8 : PLINTH + floor(r3 * floors) * H + H * 0.5;
+            p = set(bx[kk], y, side == 0 ? zb : zc);
+            rad = t == 3 ? 2.0 : t == 2 ? hrange(id, 606, seed, 3.0, 6.0) : hrange(id, 606, seed, 1.5, 4.0);
+            if (t == 3) p.x = (r2 < 0.5 ? x0 : x0 + L) + (r2 < 0.5 ? 1.5 : -1.5);
+        } else {
+            float gx = side == 2 ? x0 - 0.2 : x0 + L + 0.2;
+            float gz = lerp(zc, zb, r2);
+            // gable stories start where water enters: the top edge and the upper floors
+            float y = t == 3 ? 0.8 : lerp(ytop * 0.75, ytop, r3);
+            p = set(gx, y, gz);
+            rad = hrange(id, 606, seed, 2.0, 5.0);
+        }
+        str = hpow(id, 607, seed, 0.35, 1.0, 0.7);
+        append(cP, p); append(cR, rad); append(cS, str); append(cT, t); append(cSide, side);
+    }
+}
+setdetailattrib(0, "cause_P", cP);
+setdetailattrib(0, "cause_r", cR);
+setdetailattrib(0, "cause_s", cS);
+setdetailattrib(0, "cause_t", cT);
+setdetailattrib(0, "cause_side", cSide);

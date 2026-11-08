@@ -1,0 +1,215 @@
+// gen_shell.vfl — detail wrangle; input 1 = plan. Connective geometry generated once per
+// building: plinth, end walls, roof (thin projecting eave, or a flush parapet on taller
+// blocks), core towers and penthouses, the water tank on its stand, antennas, downpipes.
+// Reference counts (ref/reference_study.md): eave slab 17 of 25 roofs, parapets mainly on
+// high-rises; downpipes at the gable corner 6 of 18; antennas 12 of 25; FRP panel tank on a
+// raised steel stand (the user's brief; 1 of 25 photos).
+int seed = chi("../../seed");
+float L = detail(1, "L"), x0 = detail(1, "x0"), ytop = detail(1, "ytop"), H = detail(1, "H");
+int floors = detail(1, "floors");
+int main_core = detail(1, "main_core");
+float bx[] = detail(1, "bay_x");
+float bw[] = detail(1, "bay_w");
+int bt[] = detail(1, "bay_t");
+int bc[] = detail(1, "bay_core");
+int roofmode = chi("../../roof_type");     // 0 auto, 1 eave, 2 parapet
+int eave = roofmode == 1 || (roofmode == 0 && floors < 8);
+setdetailattrib(0, "eave", eave);
+
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W), x1 = x0 + L;
+float ov = eave ? 0.45 : 0.0;                       // eave overhang
+float rtop = eave ? ytop + 0.05 : ytop + 0.1;        // roof surface
+float gtop = eave ? ytop - 0.18 : ytop + 0.1 + ROOF_PARA;
+
+// plinth and gables (lower 1.4 m of each gable separate: an accent base band on some blocks).
+// Round 7: gridded so the baked vertex colour (soot, wash, splash, patches) has vertices: plinth
+// columns of 1.5 m; gable columns of 1 m from the corridor line, rows on the floor lines.
+int cnt;
+float px_[] = spaced(x0, x1, 1.5);
+float py_[] = array(0.0, PLINTH);
+float pz_[] = array(zc, zb);
+gridbox(0, px_, py_, pz_, "paint_ext", "base", 4, cnt);                 // no bottom
+float gz_[] = lines(zc, zb, zc, 1.0);
+float gyb_[] = array(0.0, 0.7, 1.4);
+float gyw_[] = lines(1.4, gtop, PLINTH, H);
+int ends[] = array(0, 1);
+foreach (int e; ends) {
+    float gx0 = e == 0 ? x0 - 0.2 : x1, gx1 = gx0 + 0.2;
+    float gx_[] = array(gx0, gx1);
+    int inner = e == 0 ? 2 : 1;                                  // the face against the building
+    int gb = gridbox(0, gx_, gyb_, gz_, "paint_ext", "base_band", inner + 4 + 8, cnt);
+    for (int f = 0; f < cnt; f++) setprimattrib(0, "gable", gb + f, e + 1);
+    int g = gridbox(0, gx_, gyw_, gz_, "paint_ext", "wall", inner + 4, cnt);
+    for (int f = 0; f < cnt; f++) setprimattrib(0, "gable", g + f, e + 1);
+    // panel joints: shallow vertical reveals at the thirds (4 of 18 gables)
+    if (hr(seed, 501, 1) < 0.4) {
+        for (int k = 1; k < 3; k++) {
+            float zj = lerp(zc, zb, k / 3.0);
+            float xo = e == 0 ? gx0 - 0.004 : gx1;
+            boxm(0, set(xo, 1.4, zj - 0.008), set(xo + 0.004, gtop, zj + 0.008), "paint_ext", "joint");
+        }
+    }
+}
+// roof
+if (eave) {
+    int r = boxm(0, set(x0 - 0.2 - ov, ytop - 0.18, zc - ov), set(x1 + 0.2 + ov, rtop, zb + ov), "paint_ext", "fascia");
+    // the slab's top is roofing; its underside is soffit
+    setprimattrib(0, "mat", r + 4, "soffit"); setprimattrib(0, "cdkey", r + 4, "soffit");
+    setprimattrib(0, "mat", r + 5, "floor"); setprimattrib(0, "cdkey", r + 5, "floor");
+    boxm(0, set(x0 - 0.1, rtop, zc - 0.1), set(x1 + 0.1, rtop + 0.08, zb + 0.1), "floor", "floor");
+} else {
+    boxm(0, set(x0, ytop - SLAB_T, zc), set(x1, rtop, zb), "floor", "floor");
+    boxm(0, set(x0, rtop, zb - 0.15), set(x1, rtop + ROOF_PARA, zb), "paint_ext", "fascia");
+    boxm(0, set(x0, rtop, zc), set(x1, rtop + ROOF_PARA, zc + 0.15), "paint_ext", "fascia");
+    boxm(0, set(x0, rtop + ROOF_PARA, zb - 0.17), set(x1, rtop + ROOF_PARA + 0.04, zb + 0.02), "coping", "fascia");
+    boxm(0, set(x0, rtop + ROOF_PARA, zc - 0.02), set(x1, rtop + ROOF_PARA + 0.04, zc + 0.17), "coping", "fascia");
+}
+
+// cores: tower beyond the corridor (stairs, lift), penthouse over the core bay
+float tank_x = 0, tank_y = 0, tank_z = 0;
+for (int k = 0; k < len(bt); k++) {
+    if (bt[k] == 0) continue;
+    float cx0 = bx[k] - bw[k] * 0.5, cx1 = bx[k] + bw[k] * 0.5;
+    float ph = rtop + 2.8;
+    float tx_[] = spaced(cx0, cx1, 1.0);
+    float ty_[] = lines(0.0, ph, PLINTH, H);
+    float tz_[] = spaced(zc - TOWER_D, zc, 1.3);
+    int t = gridbox(0, tx_, ty_, tz_, "paint_ext", "tower", 4 + 32, cnt);   // no bottom, none against the corridor
+    for (int f = 0; f < cnt; f++) setprimattrib(0, "tower", t + f, 1);
+    // vertical strip of landing windows on the stair tower's front (half levels)
+    for (int f = 0; f < floors; f++) {
+        float wy = PLINTH + f * H + H * 0.5 + 0.35;
+        float wx = bt[k] == 2 ? cx0 + 1.0 : (cx0 + cx1) * 0.5;
+        boxm(0, set(wx - 0.45, wy, zc - TOWER_D - 0.012), set(wx + 0.45, wy + 0.8, zc - TOWER_D + 0.0), "alu", "frame");
+        boxc(0, set(wx - 0.41, wy + 0.04, zc - TOWER_D - 0.016), set(wx + 0.41, wy + 0.76, zc - TOWER_D - 0.012), "plastic", {0.30, 0.33, 0.34});
+    }
+    boxm(0, set(cx0, rtop, zc), set(cx1, ph, -0.5), "paint_ext", "tower");
+    boxm(0, set(cx0 - 0.15, ph, zc - TOWER_D - 0.15), set(cx1 + 0.15, ph + 0.15, -0.35), "paint_ext", "fascia");
+    if (bt[k] == 2) {
+        // lift machine room on top of the lift side
+        boxm(0, set(cx1 - 2.6, ph + 0.15, zc - TOWER_D), set(cx1 - 0.2, ph + 2.3, zc - 0.4), "paint_ext", "tower");
+        boxm(0, set(cx1 - 2.75, ph + 2.3, zc - TOWER_D - 0.12), set(cx1 - 0.05, ph + 2.42, zc - 0.28), "paint_ext", "fascia");
+    }
+    if (bc[k] == main_core) {
+        tank_x = bt[k] == 2 ? cx0 + 1.4 : (cx0 + cx1) * 0.5; tank_y = ph + 0.15; tank_z = (zc - TOWER_D - 0.5) * 0.5;
+    }
+    // TV antennas on the penthouse roof (1-3)
+    int na = 1 + int(floor(hr(seed * 7 + k, 511, 1) * 2.999));
+    for (int a = 0; a < na; a++) {
+        vector b0 = set(cx0 + 0.4 + a * 0.6, ph + 0.15, -1.2 - a * 0.7);
+        float mh = 2.2 + hr(seed + a, 512 + k, 1) * 1.6;
+        cylm(0, b0, b0 + set(0, mh, 0), 0.024, 6, "metal", "pipe");
+        for (int y = 0; y < 2; y++) {
+            vector bp = b0 + set(0, mh - 0.25 - y * 0.6, 0);
+            float rot = radians(hr(seed + a * 3 + y, 513, 1) * 40 - 20);
+            vector dir = set(sin(rot), 0, cos(rot)), side = set(cos(rot), 0, -sin(rot));
+            cylm(0, bp - dir * 0.7, bp + dir * 0.7, 0.012, 4, "metal", "pipe");
+            for (int el = 0; el < 7; el++) {
+                vector ep = bp + dir * lerp(-0.6, 0.65, el / 6.0);
+                float ew = 0.32 - el * 0.025;
+                cylm(0, ep - side * ew, ep + side * ew, 0.005, 3, "metal", "pipe");
+            }
+        }
+    }
+}
+// FRP panel water tank on a raised steel stand, over the main core
+if (tank_y > 0) {
+    float tw = 3.0, td = 2.0, th = 2.0, sh = 1.4;
+    vector o = set(tank_x, tank_y, tank_z);
+    // stand: 6 columns, two beam levels, a base frame
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 2; j++) {
+        vector c = o + set((i - 1) * (tw * 0.5 - 0.1), 0, (j - 0.5) * (td - 0.2));
+        boxm(0, c + set(-0.06, 0, -0.06), c + set(0.06, sh, 0.06), "steel", "stand");
+    }
+    for (int lv = 0; lv < 2; lv++) {
+        float y = lv == 0 ? 0.35 : sh - 0.15;
+        boxm(0, o + set(-tw * 0.5, y, -td * 0.5 + 0.04), o + set(tw * 0.5, y + 0.15, -td * 0.5 + 0.16), "steel", "stand");
+        boxm(0, o + set(-tw * 0.5, y, td * 0.5 - 0.16), o + set(tw * 0.5, y + 0.15, td * 0.5 - 0.04), "steel", "stand");
+        for (int i = 0; i < 3; i++)
+            boxm(0, o + set((i - 1) * (tw * 0.5 - 0.1) - 0.06, y, -td * 0.5), o + set((i - 1) * (tw * 0.5 - 0.1) + 0.06, y + 0.15, td * 0.5), "steel", "stand");
+    }
+    // tank: 1 m FRP panels, each pillowed outward by 2.5 cm (a fan around a raised centre)
+    vector t0 = o + set(-tw * 0.5, sh, -td * 0.5);
+    vector dims = set(tw, th, td);
+    for (int face = 0; face < 6; face++) {
+        int ax = face / 2, sgn = face % 2;          // axis 0 x, 1 y, 2 z; side 0 min, 1 max
+        int ua = (ax + 1) % 3, va = (ax + 2) % 3;
+        int nu = int(rint(getcomp(dims, ua))), nv = int(rint(getcomp(dims, va)));
+        for (int iu = 0; iu < nu; iu++) for (int iv = 0; iv < nv; iv++) {
+            vector c[];
+            for (int q = 0; q < 4; q++) {
+                float du = (q == 1 || q == 2) ? 1 : 0, dv = (q >= 2) ? 1 : 0;
+                vector p = t0;
+                p[ax] += sgn * getcomp(dims, ax);
+                p[ua] += (iu + du) * getcomp(dims, ua) / nu;
+                p[va] += (iv + dv) * getcomp(dims, va) / nv;
+                append(c, p);
+            }
+            vector cen = (c[0] + c[1] + c[2] + c[3]) * 0.25;
+            vector nn = {0, 0, 0}; nn[ax] = sgn ? 1 : -1;
+            int pc = addpoint(0, cen + nn * 0.025);
+            int pp[];
+            foreach (vector p; c) append(pp, addpoint(0, p));
+            for (int q = 0; q < 4; q++) {
+                int a = pp[q], b = pp[(q + 1) % 4];
+                // winding: outward = clockwise seen from outside
+                vector pa = c[q], pb = c[(q + 1) % 4], pcc = cen + nn * 0.025;   // new points cannot be read back
+                vector rn = cross(pa - pcc, pb - pcc);
+                // Houdini front faces wind clockwise: the right-hand normal must point inward
+                int pr = dot(rn, nn) > 0 ? addprim(0, "poly", pc, b, a) : addprim(0, "poly", pc, a, b);
+                setprimattrib(0, "mat", pr, "frp"); setprimattrib(0, "cdkey", pr, "frp");
+            }
+        }
+    }
+    // steel bands, ladder, manhole
+    float bands[] = array(0.66, 1.33);
+    foreach (float by; bands) {
+        boxm(0, t0 + set(-0.03, by, -0.03), t0 + set(tw + 0.03, by + 0.06, td + 0.03), "steel", "stand");
+    }
+    for (int s = 0; s < 2; s++) cylm(0, t0 + set(tw + 0.12, -sh + 0.2, 0.6 + s * 0.4), t0 + set(tw + 0.12, th + 0.3, 0.6 + s * 0.4), 0.018, 6, "steel", "stand");
+    for (float y = -sh + 0.4; y < th; y += 0.3) cylm(0, t0 + set(tw + 0.12, y, 0.6), t0 + set(tw + 0.12, y, 1.0), 0.012, 5, "steel", "stand");
+    cylm(0, t0 + set(tw * 0.5, th, td * 0.5), t0 + set(tw * 0.5, th + 0.08, td * 0.5), 0.3, 12, "frp", "frp");
+    setdetailattrib(0, "tank_P", o);
+}
+
+// downpipes: gable corners on the corridor side, and every 2 units on the corridor face
+float pr_ = 0.05;
+vector gp[] = array(set(x0 + 0.12, 0, zc - 0.08), set(x1 - 0.12, 0, zc - 0.08));
+for (int k = 0; k < len(bt); k += 1) {
+    if (bt[k] != 0 || k % 2 == 1) continue;
+    append(gp, set(bx[k] + bw[k] * 0.5 - 0.25, 0, zc - 0.08));
+}
+foreach (vector p; gp) {
+    float top = eave ? ytop - 0.2 : rtop + ROOF_PARA - 0.1;
+    cylm(0, p, p + set(0, top, 0), pr_, 8, "plastic", "pipe");
+    // shoe at the bottom, brackets every ~1.8 m
+    cylm(0, p + set(0, 0.0, 0), p + set(0, 0.0, -0.18), pr_, 8, "plastic", "pipe");
+    for (float y = 1.0; y < top; y += 1.8) cylm(0, p + set(0, y, 0), p + set(0, y + 0.04, 0), pr_ + 0.012, 8, "steel", "stand");
+}
+
+// retrofit lift tower (history: UR added external lifts to older blocks; 2 of 20 walk-up
+// photos): a steel frame with glass infill near the west end of the corridor side, with a
+// bridge to the corridor at every floor and a machine head above the roof.
+if (chi("../../retrofit_lift")) {
+    int kk = 0;
+    for (int k = 0; k < len(bt); k++) if (bt[k] == 0) { kk = k; break; }
+    float lx = bx[kk] + 0.6, lz = zc - 2.2, s = 1.2;
+    float lt = rtop + 1.6;
+    for (int i = 0; i < 4; i++) {
+        float cx = lx + ((i % 2) ? s : -s), cz = lz + ((i / 2) ? s : -s);
+        boxm(0, set(cx - 0.08, 0, cz - 0.08), set(cx + 0.08, lt, cz + 0.08), "steel", "stand");
+    }
+    for (int f = 0; f <= floors; f++) {
+        float y = PLINTH + f * H - 0.2;
+        boxm(0, set(lx - s - 0.08, y, lz - s - 0.08), set(lx + s + 0.08, y + 0.2, lz + s + 0.08), "steel", "stand");
+        if (f < floors && f > 0) boxm(0, set(lx - 0.7, y, lz + s), set(lx + 0.7, y + 0.2, zc), "steel", "stand");
+    }
+    // glass infill on three faces
+    vector g0 = set(lx - s, PLINTH, lz - s), g1 = set(lx + s, lt - 0.6, lz + s);
+    quadm(0, set(g0.x, g1.y, g0.z), set(g1.x, g1.y, g0.z), set(g1.x, g0.y, g0.z), set(g0.x, g0.y, g0.z), "glass", "own");
+    quadm(0, set(g0.x, g1.y, g1.z), set(g0.x, g1.y, g0.z), set(g0.x, g0.y, g0.z), set(g0.x, g0.y, g1.z), "glass", "own");
+    quadm(0, set(g1.x, g1.y, g0.z), set(g1.x, g1.y, g1.z), set(g1.x, g0.y, g1.z), set(g1.x, g0.y, g0.z), "glass", "own");
+    boxm(0, set(lx - s - 0.1, lt - 0.6, lz - s - 0.1), set(lx + s + 0.1, lt + 0.4, lz + s + 0.1), "paint_ext", "tower");
+    // the lift car shaft core (dark) inside the glass
+    boxm(0, set(lx - 0.8, 0, lz - 0.8), set(lx + 0.8, lt - 0.6, lz + 0.8), "metal", "own");
+}

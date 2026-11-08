@@ -1,0 +1,146 @@
+// assign.vfl — prim wrangle on the assembled building. Input 1 = plan (detail attributes).
+// Sets shop_materialpath (absolute, from the spare parm `matroot` = `opfullpath("../../mats")`),
+// the paint scheme colour by `cdkey`, per-bay meso tint, repaint patches, rough/metal.
+int seed = chi("../../seed");
+string style = chs("../../style");
+// paint schemes weighted by the reference counts: white/off-white 16, light grey 7 of 30;
+// beige/cream, pink and tan are minorities (ref/reference_study.md 2.1)
+if (style == "seed") {
+    float r = hr(seed, 41, 3);
+    style = r < 0.42 ? "white" : r < 0.66 ? "light_grey" : r < 0.80 ? "cream" : r < 0.90 ? "beige_brown" : "pink";
+}
+vector wall = {0.70, 0.69, 0.66};
+if (style == "light_grey") wall = {0.56, 0.56, 0.55};
+if (style == "cream") wall = {0.67, 0.63, 0.54};
+if (style == "beige_brown") wall = {0.57, 0.51, 0.43};
+if (style == "pink") wall = {0.67, 0.58, 0.54};
+// one muted accent on about half the blocks; where it goes, by frequency in the photos
+vector accents[] = array({0.34, 0.16, 0.10}, {0.38, 0.27, 0.12}, {0.52, 0.30, 0.22}, {0.40, 0.50, 0.58},
+                         {0.28, 0.34, 0.40}, {0.06, 0.09, 0.17}, {0.30, 0.38, 0.32}, {0.12, 0.28, 0.28});
+vector accent = accents[int(floor(hr(seed, 42, 3) * 7.999))];
+string aloc = "none";
+float ra = hr(seed, 43, 3);
+if (ra < 0.18) aloc = "plinth"; else if (ra < 0.31) aloc = "stripes"; else if (ra < 0.42) aloc = "fascia"; else if (ra < 0.52) aloc = "tower";
+vector rail = {0.70, 0.70, 0.68};    // white steel rails in every reference photo
+vector doors[] = array({0.14, 0.30, 0.30}, {0.30, 0.22, 0.16}, {0.36, 0.38, 0.38}, {0.20, 0.26, 0.36});
+vector door = doors[int(floor(hr(seed, 44, 3) * 3.999))];
+vector frame = {0.62, 0.62, 0.60}, board = {0.70, 0.69, 0.64};
+if (hr(seed, 45, 3) < 0.25) frame = {0.20, 0.17, 0.14};    // bronze sashes on some blocks
+vector numcol = hr(seed, 46, 3) < 0.77 ? {0.03, 0.03, 0.035} : {0.05, 0.07, 0.16};
+vector soffit = lerp(wall, {0.74, 0.73, 0.71}, 0.6);
+setdetailattrib(0, "accent_loc", aloc);
+setdetailattrib(0, "style", style);
+
+string mat = s@mat;
+string nm = s@name;
+if (mat == "") {
+    // shell boxes from gen_shell carry only a name
+    mat = "paint_ext";
+    if (startswith(nm, "plinth")) { mat = "paint_ext"; s@cdkey = "base"; }
+    else if (startswith(nm, "roof") && nm != "roof_para_s" && nm != "roof_para_n") mat = "floor";
+    else if (startswith(nm, "tank_stand")) mat = "steel";
+    else if (startswith(nm, "tank")) mat = "frp";
+}
+string key = s@cdkey;
+if (key == "") {
+    key = "wall";
+    if (mat == "soffit") key = "soffit";
+    else if (mat == "steel") key = "rail";
+    else if (mat == "alu") key = "frame";
+    else if (mat == "board") key = "board";
+    else if (mat == "floor") key = "floor";
+    else if (mat == "concrete") key = "concrete";
+    else if (mat == "frp") key = "frp";
+    else if (mat == "glass" || mat == "decal" || mat == "room" || mat == "fabric" || mat == "plastic" || mat == "metal") key = "own";
+}
+vector cd = v@Cd;
+if (key == "wall") cd = wall;
+else if (key == "soffit") cd = soffit;
+else if (key == "accent") cd = accent;
+else if (key == "rail") cd = rail;
+else if (key == "door") cd = door;
+else if (key == "frame") cd = frame;
+else if (key == "board") cd = board;
+else if (key == "floor") cd = {0.24, 0.24, 0.23};
+else if (key == "base") cd = aloc == "plinth" ? accent : wall * {0.62, 0.62, 0.63};
+else if (key == "concrete") cd = {0.78, 0.77, 0.74};
+else if (key == "frp") cd = {0.62, 0.62, 0.57};
+else if (key == "base_band") cd = aloc == "plinth" ? accent : wall * 0.93;
+else if (key == "joint") cd = wall * 0.85;
+else if (key == "recess") cd = wall * chf("recess_k");   // LOD2: painted-in shadow of the balcony recess
+else if (key == "fascia") cd = aloc == "fascia" ? accent : wall;
+else if (key == "tower") cd = aloc == "tower" ? lerp(accent, wall, 0.3) : wall;
+else if (key == "slabedge") cd = aloc == "stripes" ? accent : wall;
+else if (key == "stand") cd = {0.17, 0.21, 0.19};
+else if (key == "number") cd = numcol;
+else if (key == "pipe") cd = {0.55, 0.55, 0.53};
+else if (key == "door2") cd = lerp(door, wall, 0.35);
+else if (key == "accent2") cd = lerp(accent, wall, 0.55);
+else {
+    // interiors and clutter: colours chosen per flat (unit) and per item (lidx)
+    int u = i@unit, li = i@lidx;
+    int pe = i@persona;
+    float r1 = hr(u * 37 + li, 91, seed), r2 = hr(u * 37 + li, 92, seed);
+    if (key == "room_wall") cd = pe == 4 ? {0.62, 0.60, 0.56} : lerp({0.42, 0.39, 0.34}, {0.55, 0.52, 0.47}, r1);
+    else if (key == "room_floor") cd = lerp({0.22, 0.16, 0.10}, {0.33, 0.30, 0.20}, r1);
+    else if (key == "room_ceil") cd = {0.50, 0.48, 0.44};
+    else if (key == "furn") cd = lerp({0.10, 0.08, 0.07}, {0.30, 0.24, 0.18}, r1);
+    else if (key == "furn2") cd = lerp({0.20, 0.17, 0.14}, {0.38, 0.33, 0.27}, r2);
+    else if (key == "lace") cd = lerp({0.62, 0.61, 0.57}, {0.74, 0.73, 0.69}, r1);
+    else if (key == "drape") {
+        vector dc[] = array({0.45, 0.40, 0.30}, {0.30, 0.36, 0.30}, {0.28, 0.32, 0.42}, {0.50, 0.35, 0.30},
+                            {0.55, 0.52, 0.44}, {0.36, 0.30, 0.34}, {0.20, 0.22, 0.25}, {0.52, 0.47, 0.36});
+        cd = dc[int(floor(hr(u, 93, seed) * 7.999))];
+    }
+    else if (key == "laundry") {
+        // mostly white, grey, navy and beige; about 1 item in 12 saturated
+        if (r1 < 0.40) cd = lerp({0.70, 0.70, 0.68}, {0.78, 0.78, 0.76}, r2);
+        else if (r1 < 0.55) cd = lerp({0.42, 0.43, 0.44}, {0.58, 0.58, 0.58}, r2);
+        else if (r1 < 0.70) cd = lerp({0.05, 0.07, 0.13}, {0.10, 0.13, 0.22}, r2);
+        else if (r1 < 0.84) cd = lerp({0.50, 0.45, 0.36}, {0.62, 0.56, 0.45}, r2);
+        else if (r1 < 0.92) cd = lerp({0.36, 0.45, 0.55}, {0.50, 0.58, 0.66}, r2);
+        else { vector sc[] = array({0.50, 0.10, 0.08}, {0.62, 0.50, 0.12}, {0.12, 0.30, 0.16}, {0.55, 0.30, 0.38}); cd = sc[int(floor(r2 * 3.999))]; }
+    }
+    else if (key == "futon") {
+        vector fc[] = array({0.72, 0.62, 0.62}, {0.70, 0.66, 0.55}, {0.52, 0.60, 0.70}, {0.75, 0.74, 0.70}, {0.55, 0.62, 0.50});
+        cd = fc[int(floor(hr(u, 94, seed) * 4.999))];
+    }
+    else if (key == "leaf") cd = lerp({0.04, 0.10, 0.03}, {0.12, 0.20, 0.06}, r1);
+}
+
+// per-bay meso tint (±3 %) and repaint patches on painted surfaces. Round 7: the patches come
+// from weather_params (input 1 = causes, which carries them): rectangles of bays x floors on the
+// long faces, of 1 m columns x floors on the gables. Patch prims get `fresh` (the bake keeps them
+// cleaner) and a tone shift scaled by the patch contrast.
+i@fresh = 0;
+if ((key == "wall" || key == "soffit" || key == "slabedge" || key == "base_band" || key == "fascia") && (s@role != "" || i@gable > 0)) {
+    int b = i@bay, f = i@floor, sd = i@side;
+    if (s@role != "") {
+        float t = 1.0 + 0.06 * (hr(b * 7 + sd, 51, seed) - 0.5) + 0.03 * (hr(f * 131 + b * 7 + sd, 52, seed) - 0.5);
+        cd *= t;
+    }
+    int ps[] = detail(1, "p_side");
+    int pb0[] = detail(1, "p_b0"), pb1[] = detail(1, "p_b1"), pf0[] = detail(1, "p_f0"), pf1[] = detail(1, "p_f1");
+    float psh[] = detail(1, "p_shade");
+    float pcon = detail(1, "w_pcon");
+    vector pc = primuv(0, "P", @primnum, {0.5, 0.5, 0});
+    float H_ = detail(1, "H");
+    float zc_ = -(D_DEPTH * 0.5 + COR_W);
+    for (int k = 0; k < len(ps); k++) {
+        int inside = 0;
+        if (s@role != "") inside = ps[k] == sd && b >= pb0[k] && b <= pb1[k] && f >= pf0[k] && f <= pf1[k];
+        else {
+            int col = int(floor(pc.z - zc_));
+            int fl_ = int(floor((pc.y - PLINTH) / H_));
+            inside = ps[k] == i@gable + 1 && col >= pb0[k] && col <= pb1[k] && fl_ >= pf0[k] && fl_ < pf1[k];
+        }
+        if (inside) {
+            cd *= 1.0 + psh[k] * pcon;
+            f@rough = 0.78;     // most of the mismatch is sheen
+            i@fresh = 1;
+        }
+    }
+}
+v@Cd = cd;
+s@mat = mat;
+s@shop_materialpath = chs("matroot") + "/" + mat;

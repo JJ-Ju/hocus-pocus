@@ -108,6 +108,12 @@ Bake or rasterize them depending on the asset:
 - **Shared trims and tiling materials:** world placement differs per instance, so keep these
   masks as vertex colour or per-instance data and blend in the shader. Tiling textures cannot
   carry placement-dependent grime.
+- **A whole building (round I):** facade-space masks at 25-50 px/m say where each weathering
+  layer is; the shader reveals each mask against a tiling detail at about 1,024 px/m (the
+  coverage-preserving edge rule), so marks are crisp up close; discrete marks (rust runs, cracks,
+  leaks) are decals from one atlas. Baking the look into one unique facade sheet at mask density
+  reads blurry at street level, however good the rules behind it. See the `large-scale-texturing`
+  skill.
 
 ## Bake what belongs to the mesh, compute what belongs to the world
 

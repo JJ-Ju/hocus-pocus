@@ -1,0 +1,2606 @@
+{
+ "summary": {
+  "fails": {},
+  "warns": {
+   "reference_match": [
+    "preset_facade_new.jpg",
+    "preset_facade_well_kept.jpg",
+    "preset_facade_typical.jpg",
+    "preset_facade_neglected.jpg",
+    "sweep_streaks_000.jpg",
+    "sweep_streaks_025.jpg",
+    "sweep_streaks_050.jpg",
+    "sweep_streaks_075.jpg",
+    "sweep_streaks_100.jpg",
+    "sweep_edge_damage_000.jpg",
+    "sweep_edge_damage_025.jpg",
+    "sweep_edge_damage_050.jpg",
+    "sweep_edge_damage_075.jpg",
+    "sweep_edge_damage_100.jpg",
+    "sweep_grime_000.jpg",
+    "sweep_grime_025.jpg",
+    "sweep_grime_050.jpg",
+    "sweep_grime_075.jpg",
+    "sweep_grime_100.jpg",
+    "sweep_stain_fields_000.jpg",
+    "sweep_stain_fields_025.jpg",
+    "sweep_stain_fields_050.jpg",
+    "sweep_stain_fields_075.jpg",
+    "sweep_stain_fields_100.jpg",
+    "grid_age10_upkeep090.jpg",
+    "grid_age10_upkeep050.jpg",
+    "grid_age10_upkeep010.jpg",
+    "grid_age35_upkeep090.jpg",
+    "grid_age35_upkeep050.jpg",
+    "grid_age35_upkeep010.jpg",
+    "grid_age60_upkeep090.jpg",
+    "grid_age60_upkeep050.jpg",
+    "grid_age60_upkeep010.jpg"
+   ]
+  }
+ },
+ "images": {
+  "preset_bay_new.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 92.474
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.029
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.865
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.334
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.147
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.538
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.099
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.319
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 35.421
+    },
+    "saliency": {
+     "status": "info",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 8.983
+    }
+   }
+  },
+  "preset_bay_well_kept.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 85.219
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.027
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.858
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.327
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.143
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.543
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.088
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.307
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 27.421
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.556
+    }
+   }
+  },
+  "preset_bay_typical.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.379
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.02
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.857
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.326
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.196
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.545
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.185
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 26.405
+    },
+    "saliency": {
+     "status": "info",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.852
+    }
+   }
+  },
+  "preset_bay_neglected.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 71.413
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.144
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.854
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.321
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.222
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.547
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.086
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.157
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 24.237
+    },
+    "saliency": {
+     "status": "info",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 8.495
+    }
+   }
+  },
+  "preset_facade_new.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 88.012
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 6.774
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.737
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.731
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.97
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.182
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.08
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.149
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 35.803
+    },
+    "saliency": {
+     "status": "info",
+     "value": 4
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.428
+    }
+   }
+  },
+  "preset_facade_well_kept.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 80.965
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 4.548
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.702
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.708
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.24
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.06
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.265
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 41.132
+    },
+    "saliency": {
+     "status": "info",
+     "value": 4
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.379
+    }
+   }
+  },
+  "preset_facade_typical.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 73.866
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.494
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.682
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.688
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.184
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.238
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.045
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.242
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 29.558
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": null
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.826
+    }
+   }
+  },
+  "preset_facade_neglected.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 68.918
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 1.639
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.683
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.667
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.968
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.182
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.236
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.023
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.219
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 14.293
+    },
+    "saliency": {
+     "status": "info",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": null
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 16.33
+    }
+   }
+  },
+  "sweep_streaks_000.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 73.312
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.039
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.717
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.886
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.06
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.135
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.519
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.928
+    }
+   }
+  },
+  "sweep_streaks_025.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.596
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.053
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.718
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.886
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.059
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.114
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.422
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.951
+    }
+   }
+  },
+  "sweep_streaks_050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.405
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.079
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.884
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.202
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.239
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.058
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.138
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.335
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.98
+    }
+   }
+  },
+  "sweep_streaks_075.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.106
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.884
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.056
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.169
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.439
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.994
+    }
+   }
+  },
+  "sweep_streaks_100.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.099
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.879
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.236
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.057
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.172
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.456
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 16.005
+    }
+   }
+  },
+  "sweep_edge_damage_000.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.575
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.093
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.884
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.057
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.132
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.151
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.994
+    }
+   }
+  },
+  "sweep_edge_damage_025.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.092
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.885
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.056
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.162
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.386
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.993
+    }
+   }
+  },
+  "sweep_edge_damage_050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.09
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.884
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.057
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.16
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.407
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.992
+    }
+   }
+  },
+  "sweep_edge_damage_075.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.088
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.884
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.057
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.163
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.412
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.993
+    }
+   }
+  },
+  "sweep_edge_damage_100.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.092
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.884
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.057
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.162
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.377
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.993
+    }
+   }
+  },
+  "sweep_grime_000.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 86.875
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 3.987
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.779
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.951
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.192
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.234
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.255
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.193
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 53.503
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.667
+    }
+   }
+  },
+  "sweep_grime_025.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 81.675
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 3.863
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.752
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.927
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.909
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.232
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.25
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.081
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.183
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 53.165
+    },
+    "saliency": {
+     "status": "info",
+     "value": 3
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.25
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.404
+    }
+   }
+  },
+  "sweep_grime_050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 75.881
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.916
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.727
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.897
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.909
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.233
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.245
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.063
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.155
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 53.184
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.705
+    }
+   }
+  },
+  "sweep_grime_075.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 71.97
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.453
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.709
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.858
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.911
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.203
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.241
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.043
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.24
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 6.395
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 16.468
+    }
+   }
+  },
+  "sweep_grime_100.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 65.114
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 3.708
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.706
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.809
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.912
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.185
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.238
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.028
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.219
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 5.724
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 17.054
+    }
+   }
+  },
+  "sweep_stain_fields_000.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.944
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.437
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.721
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.874
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.241
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.058
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.134
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.484
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.943
+    }
+   }
+  },
+  "sweep_stain_fields_025.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.575
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.431
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.72
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.877
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.241
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.058
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.124
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.197
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.972
+    }
+   }
+  },
+  "sweep_stain_fields_050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.575
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.082
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.882
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.243
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.057
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.111
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.175
+    },
+    "saliency": {
+     "status": "info",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.991
+    }
+   }
+  },
+  "sweep_stain_fields_075.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 72.575
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.129
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.888
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.238
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.245
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.056
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.158
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.158
+    },
+    "saliency": {
+     "status": "info",
+     "value": 3
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.991
+    }
+   }
+  },
+  "sweep_stain_fields_100.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.379
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.164
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.719
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -0.896
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.91
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.237
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.245
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.056
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.171
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 52.336
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 2
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.977
+    }
+   }
+  },
+  "grid_age10_upkeep090.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 82.227
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 4.967
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.707
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.71
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.182
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.241
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.062
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.19
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 37.415
+    },
+    "saliency": {
+     "status": "info",
+     "value": 4
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.328
+    }
+   }
+  },
+  "grid_age10_upkeep050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 79.288
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 3.613
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.694
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.7
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.24
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.056
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.273
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 38.739
+    },
+    "saliency": {
+     "status": "info",
+     "value": 4
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.476
+    }
+   }
+  },
+  "grid_age10_upkeep010.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 76.013
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.978
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.685
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.691
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.238
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.05
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.235
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 32.054
+    },
+    "saliency": {
+     "status": "info",
+     "value": 3
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.25
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.658
+    }
+   }
+  },
+  "grid_age35_upkeep090.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 79.907
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 3.77
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.697
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.705
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.97
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.24
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.058
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.288
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 39.525
+    },
+    "saliency": {
+     "status": "info",
+     "value": 4
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.433
+    }
+   }
+  },
+  "grid_age35_upkeep050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 74.181
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.502
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.682
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.688
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.218
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.184
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.238
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.045
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.274
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 31.874
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": null
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.827
+    }
+   }
+  },
+  "grid_age35_upkeep010.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 69.234
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 1.932
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.681
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.667
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.968
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.236
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.024
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.253
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 14.443
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": null
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 16.315
+    }
+   }
+  },
+  "grid_age60_upkeep090.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.284
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 3.331
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.691
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.699
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.24
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.054
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.303
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 37.419
+    },
+    "saliency": {
+     "status": "info",
+     "value": 3
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.52
+    }
+   }
+  },
+  "grid_age60_upkeep050.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 71.413
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.32
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.682
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.686
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.969
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.187
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.236
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.04
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.227
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 24.942
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": null
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 15.956
+    }
+   }
+  },
+  "grid_age60_upkeep010.jpg": {
+   "view": "wide",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 68.545
+    },
+    "value_grouping": {
+     "status": "pass",
+     "value": 2.915
+    },
+    "squint": {
+     "status": "info",
+     "value": 0.683
+    },
+    "spectral_slope": {
+     "status": "info",
+     "value": -0.659
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.201
+    },
+    "palette": {
+     "status": "pass",
+     "value": 0.968
+    },
+    "depth_separation": {
+     "status": "info",
+     "value": 0.181
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.236
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.02
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.228
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 13.749
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": null
+    },
+    "reference_match": {
+     "status": "warn",
+     "value": 16.401
+    }
+   }
+  },
+  "sweep_edge_damage_bay_000.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 79.287
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.025
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.857
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.326
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.12
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.545
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.34
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 26.759
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.854
+    }
+   }
+  },
+  "sweep_edge_damage_bay_025.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.016
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.023
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.857
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.326
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.15
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.545
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.151
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 27.347
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.852
+    }
+   }
+  },
+  "sweep_edge_damage_bay_050.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.742
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.027
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.857
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.325
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.196
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.545
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.31
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 25.797
+    },
+    "saliency": {
+     "status": "info",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.125
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.853
+    }
+   }
+  },
+  "sweep_edge_damage_bay_075.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 78.379
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.022
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.857
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.325
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.195
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.545
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.184
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 26.051
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.853
+    }
+   }
+  },
+  "sweep_edge_damage_bay_100.jpg": {
+   "view": "close",
+   "tests": {
+    "value_range": {
+     "status": "pass",
+     "value": 79.287
+    },
+    "value_grouping": {
+     "status": "info",
+     "value": 1.024
+    },
+    "squint": {
+     "status": "pass",
+     "value": 0.857
+    },
+    "spectral_slope": {
+     "status": "pass",
+     "value": -1.325
+    },
+    "saturation_budget": {
+     "status": "pass",
+     "value": 0.12
+    },
+    "palette": {
+     "status": "pass",
+     "value": 1.0
+    },
+    "depth_separation": {
+     "status": "na",
+     "value": null
+    },
+    "detail_density": {
+     "status": "pass",
+     "value": 0.545
+    },
+    "repetition": {
+     "status": "pass",
+     "value": 0.094
+    },
+    "streak_evenness": {
+     "status": "info",
+     "value": 0.344
+    },
+    "micro_uniformity": {
+     "status": "pass",
+     "value": 26.257
+    },
+    "saliency": {
+     "status": "pass",
+     "value": 1
+    },
+    "camera": {
+     "status": "pass",
+     "value": 0.0
+    },
+    "reference_match": {
+     "status": "pass",
+     "value": 6.852
+    }
+   }
+  }
+ }
+}

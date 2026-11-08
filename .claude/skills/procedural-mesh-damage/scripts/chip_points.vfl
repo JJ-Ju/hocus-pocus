@@ -13,7 +13,7 @@
 //   keep_high    float  keep probability at the top of the piece, e.g. 0.35
 //   inset        float  push the cutter centre into the piece by inset * pscale, e.g. 0.3
 //   seam_axis    vector axes whose bounding faces are tiling seams, e.g. {1,0,0} for x ends
-//   seam_margin  float  no chips within this distance of a seam face (m), e.g. 0.06
+//   seam_margin  float  clear distance between any cutter and a seam face (m), e.g. 0.03
 //   seed         int    per-instance seed
 //
 // Optional point attribute on input 0: f@damage_mask (0-1). If present, it scales the
@@ -56,13 +56,15 @@ for (int he = 0; he < nvertices(0); he++) {
         vector4 key = set(he, i, seed, 0);
         float u = (i + rand(key + {0, 0, 0, 7})) / n;
         vector P = lerp(A, B, u);
-        // seam exclusion: distance to each bounding face on the seam axes
+        float s = fit01(pow(rand(key + {0, 0, 0, 3}), sbias), smin, smax);
+        // seam exclusion counts the cutter's reach, not only its centre: distance to each
+        // bounding face on the seam axes must exceed the margin plus the chip radius
         int near_seam = 0;
         for (int ax = 0; ax < 3; ax++) {
             if (getcomp(seam_axis, ax) < 0.5) continue;
             float lo = getcomp(P, ax) - getcomp(bmin, ax);
             float hi = getcomp(bmax, ax) - getcomp(P, ax);
-            if (min(lo, hi) < seam_m) near_seam = 1;
+            if (min(lo, hi) < seam_m + s) near_seam = 1;
         }
         if (near_seam) continue;
         // density: height bias inside the piece, times an optional mask
@@ -73,7 +75,6 @@ for (int he = 0; he < nvertices(0); he++) {
             keep *= lerp(m0, m1, u);
         }
         if (rand(key) > keep) continue;
-        float s = fit01(pow(rand(key + {0, 0, 0, 3}), sbias), smin, smax);
         int pt = addpoint(0, P - out_dir * inset * s);
         setpointattrib(0, "pscale", pt, s);
         vector axis = normalize(vector(rand(key + {0, 0, 0, 13})) - 0.5);

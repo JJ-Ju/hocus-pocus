@@ -161,13 +161,28 @@ copies as instances. Then a piece can be looked at, LOD'd and varied alone.
 - Make a material as a VOP subnet in `/mat` with the `material` flag set
   (`{"op": "node", "path": "/mat/m_panel", "flags": {"material": true}}`) containing an
   `mtlxstandard_surface` wired to a `subnetconnector` named `surface`. Without the flag a
-  Material Library LOP imports nothing.
+  Material Library LOP imports nothing. If it still imports nothing, build the material with
+  `voptoolutils._setupMtlXBuilderSubnet` inside the library (matnet `.`) and turn on
+  `fillmaterials`. A plain subnet with a `subnetconnector` failed there once; the cause was not
+  isolated.
+- Stage traps for close-ups:
+  - A camera's default `clippingRange` near plane is 1 m, which clips close-ups; lower it.
+  - A SOP Import LOP's `primpath` did not place the mesh; it landed at `/<pathprefix>/mesh_0`,
+    so set `pathprefix`.
 - MaterialX `signature` parms accept every signature the node defines (`color3`, `float`,
   …), even though Houdini's menu lists only `default`.
 - Assign by attribute in SOPs (`shop_materialpath` per prim, or Material SOP groups), and
   check it landed: `inspect {what: "geo", target, group_by: "shop_materialpath"}`.
+- Packed instances lose a material assigned inside the packed piece; they keep one only when
+  `shop_materialpath` is on the packed prim itself. Output unpacked geometry by default, and
+  offer packed instances as an engine option with the material on the packed prim.
+- MaterialX input parms carry their signature in the name (`in2_vector3`), so setting `in2`
+  by script fails with `InvalidSize`. Read the names with `inspect {what: "parms"}`.
 - SOP `Cd` reaches USD as the primvar `displayColor`. A `geompropvalue` reading `"Cd"`
   returns black in Karma; read `"displayColor"`.
+- `hou.Parm.set` on a menu parm takes the item's index; some menus (`filletshape`, `grouptype`)
+  refuse a string token there. `parm_set` and `edit` accept tokens, and their error notes say
+  which form a menu takes.
 - Copy to Points' attribute-apply menus (`applyto1` …) take tokens (`prims`, `points`,
   `verts`). Set by index, 1 is vertices: a `shop_materialpath` copied there assigns
   nothing, and no warning says so.

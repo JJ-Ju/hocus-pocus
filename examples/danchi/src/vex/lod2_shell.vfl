@@ -1,0 +1,32 @@
+// lod2_shell.vfl — detail wrangle, input 1 = plan, input 2 = shell (for eave). A banded shell
+// for distance: the body box set back to the wall lines, one long box per floor for the
+// balcony fronts and the corridor parapets (the gaps read as the shaded recesses), cores,
+// penthouses, roof slab and a tank block. The recessed wall gets a darker colour key so the
+// mean value matches LOD0 (the real recess is in shadow; see the LOD value check).
+float L = detail(1, "L"), x0 = detail(1, "x0"), ytop = detail(1, "ytop"), H = detail(1, "H");
+int floors = detail(1, "floors");
+int eave = detail(2, "eave");
+float bx[] = detail(1, "bay_x");
+float bw[] = detail(1, "bay_w");
+int bt[] = detail(1, "bay_t");
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W), x1 = x0 + L;
+float d2 = D_DEPTH * 0.5;
+boxm(0, set(x0, 0, -d2), set(x1, ytop, d2), "paint_ext", "recess");
+boxm(0, set(x0, 0, zc), set(x1, PLINTH, zb), "paint_ext", "base");
+boxm(0, set(x0 - 0.2, 0, zc), set(x0, eave ? ytop - 0.18 : ytop + 0.7, zb), "paint_ext", "wall");
+boxm(0, set(x1, 0, zc), set(x1 + 0.2, eave ? ytop - 0.18 : ytop + 0.7, zb), "paint_ext", "wall");
+for (int f = 0; f < floors; f++) {
+    float y = PLINTH + f * H;
+    boxm(0, set(x0, y - 0.15, d2), set(x1, y + 1.0, zb), "paint_ext", "wall");     // balcony fronts
+    boxm(0, set(x0, y - 0.18, zc), set(x1, y + 1.1, -d2), "paint_ext", "wall");    // corridor parapets
+}
+float ov = eave ? 0.45 : 0.0;
+boxm(0, set(x0 - 0.2 - ov, ytop - 0.18, zc - ov), set(x1 + 0.2 + ov, ytop + (eave ? 0.05 : 0.7), zb + ov), "paint_ext", "fascia");
+for (int k = 0; k < len(bt); k++) {
+    if (bt[k] == 0) continue;
+    float cx0 = bx[k] - bw[k] * 0.5, cx1 = bx[k] + bw[k] * 0.5;
+    boxm(0, set(cx0, 0, zc - TOWER_D), set(cx1, ytop + 2.85, zc), "paint_ext", "tower");
+    boxm(0, set(cx0, ytop, zc), set(cx1, ytop + 2.85, -0.5), "paint_ext", "tower");
+}
+vector tp = detail(2, "tank_P");
+if (length(tp) > 0) boxm(0, tp + set(-1.5, 0, -1.0), tp + set(1.5, 3.4, 1.0), "frp", "frp");

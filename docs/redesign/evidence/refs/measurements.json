@@ -1,0 +1,2561 @@
+{
+ "note": "Measurements from frame_critique.py 0.2 (round B) on the reference photos (rR-reference-photos.md). full = whole frame as the tool runs it; wall = the same photo with --crop to the building (crop given), used for surface L*, chroma ratio and micro grain. loo = reference_match/palette against the other photos of the same category.",
+ "photos": {
+  "bay_01_apartment_balconies_laundry.jpg": {
+   "full": {
+    "L": 73.68,
+    "clip": 0.001,
+    "crush": 0.002,
+    "span": 80.906,
+    "ratio": 0.151,
+    "pale": 0.0,
+    "hic": 0.003,
+    "a80": 0.586,
+    "rest": 0.128,
+    "p9010": 10.21,
+    "cv": 0.912,
+    "mls": 4.833,
+    "kurt": 21.345,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 73.68,
+    "clip": 0.001,
+    "crush": 0.002,
+    "span": 80.906,
+    "ratio": 0.151,
+    "pale": 0.0,
+    "hic": 0.003,
+    "a80": 0.586,
+    "rest": 0.128,
+    "p9010": 10.21,
+    "cv": 0.912,
+    "mls": 4.833,
+    "kurt": 21.345,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,1,1",
+   "loo_same_category": {
+    "emd_L": 11.88,
+    "emd_C": 7.62,
+    "palette_dE": 10.35,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "bay_02_toei_umegaoka_balcony.jpg": {
+   "full": {
+    "L": 93.976,
+    "clip": 0.023,
+    "crush": 0.0,
+    "span": 88.405,
+    "ratio": 0.295,
+    "pale": 0.001,
+    "hic": 0.0,
+    "a80": 0.344,
+    "rest": 0.47,
+    "p9010": 27.398,
+    "cv": 1.271,
+    "mls": 2.614,
+    "kurt": 22.687,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 94.174,
+    "clip": 0.017,
+    "crush": 0.0,
+    "span": 88.087,
+    "ratio": 0.171,
+    "pale": 0.001,
+    "hic": 0.0,
+    "a80": 0.336,
+    "rest": 0.472,
+    "p9010": 29.968,
+    "cv": 1.325,
+    "mls": 2.684,
+    "kurt": 30.009,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.15,0.95,1",
+   "loo_same_category": {
+    "emd_L": 9.26,
+    "emd_C": 6.71,
+    "palette_dE": 9.24,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "bay_03_sapporo_balconies.jpg": {
+   "full": {
+    "L": 83.84,
+    "clip": 0.007,
+    "crush": 0.0,
+    "span": 87.234,
+    "ratio": 0.01,
+    "pale": 0.003,
+    "hic": 0.002,
+    "a80": 0.484,
+    "rest": 0.262,
+    "p9010": 13.5,
+    "cv": 1.172,
+    "mls": 3.035,
+    "kurt": 26.475,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 83.84,
+    "clip": 0.007,
+    "crush": 0.0,
+    "span": 87.234,
+    "ratio": 0.01,
+    "pale": 0.003,
+    "hic": 0.002,
+    "a80": 0.484,
+    "rest": 0.262,
+    "p9010": 13.5,
+    "cv": 1.172,
+    "mls": 3.035,
+    "kurt": 26.475,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,1,1",
+   "loo_same_category": {
+    "emd_L": 9.3,
+    "emd_C": 7.32,
+    "palette_dE": 9.79,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "bay_04_tsurukawa_balconies_oblique.jpg": {
+   "full": {
+    "L": 83.948,
+    "clip": 0.022,
+    "crush": 0.001,
+    "span": 94.516,
+    "ratio": 0.545,
+    "pale": 0.037,
+    "hic": 0.048,
+    "a80": 0.519,
+    "rest": 0.232,
+    "p9010": 20.903,
+    "cv": 0.757,
+    "mls": 7.896,
+    "kurt": 8.619,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 83.97,
+    "clip": 0.038,
+    "crush": 0.0,
+    "span": 93.1,
+    "ratio": 0.496,
+    "pale": 0.059,
+    "hic": 0.02,
+    "a80": 0.464,
+    "rest": 0.283,
+    "p9010": 29.892,
+    "cv": 0.984,
+    "mls": 6.207,
+    "kurt": 12.301,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,0.45,1",
+   "loo_same_category": {
+    "emd_L": 8.79,
+    "emd_C": 9.15,
+    "palette_dE": 12.74,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "bay_05_danchi_balcony_grid.jpg": {
+   "full": {
+    "L": 95.87,
+    "clip": 0.091,
+    "crush": 0.009,
+    "span": 98.458,
+    "ratio": 0.319,
+    "pale": 0.01,
+    "hic": 0.104,
+    "a80": 0.649,
+    "rest": 0.058,
+    "p9010": 16.622,
+    "cv": 0.849,
+    "mls": 7.844,
+    "kurt": 13.509,
+    "vr": "pass",
+    "sb": "fail",
+    "dd": "fail",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 96.133,
+    "clip": 0.12,
+    "crush": 0.011,
+    "span": 98.998,
+    "ratio": 0.307,
+    "pale": 0.01,
+    "hic": 0.007,
+    "a80": 0.646,
+    "rest": 0.077,
+    "p9010": 15.334,
+    "cv": 0.866,
+    "mls": 7.135,
+    "kurt": 14.746,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,1,0.72",
+   "loo_same_category": {
+    "emd_L": 8.36,
+    "emd_C": 8.9,
+    "palette_dE": 11.65,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "bay_06_nishi_nagahori_balconies.jpg": {
+   "full": {
+    "L": 84.465,
+    "clip": 0.056,
+    "crush": 0.013,
+    "span": 96.282,
+    "ratio": 0.621,
+    "pale": 0.044,
+    "hic": 0.0,
+    "a80": 0.577,
+    "rest": 0.146,
+    "p9010": 28.308,
+    "cv": 0.934,
+    "mls": 5.674,
+    "kurt": 23.959,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 84.465,
+    "clip": 0.056,
+    "crush": 0.013,
+    "span": 96.282,
+    "ratio": 0.621,
+    "pale": 0.044,
+    "hic": 0.0,
+    "a80": 0.577,
+    "rest": 0.146,
+    "p9010": 28.308,
+    "cv": 0.934,
+    "mls": 5.674,
+    "kurt": 23.959,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,1,1",
+   "loo_same_category": {
+    "emd_L": 7.14,
+    "emd_C": 8.63,
+    "palette_dE": 13.75,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "end_01_akabanedai_34_end.jpg": {
+   "full": {
+    "L": 98.056,
+    "clip": 0.158,
+    "crush": 0.02,
+    "span": 98.629,
+    "ratio": 0.601,
+    "pale": 0.016,
+    "hic": 0.0,
+    "a80": 0.445,
+    "rest": 0.312,
+    "p9010": 14.262,
+    "cv": 0.923,
+    "mls": 6.145,
+    "kurt": 17.585,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 55.093,
+    "clip": 0.005,
+    "crush": 0.013,
+    "span": 93.238,
+    "ratio": 0.194,
+    "pale": 0.015,
+    "hic": 0.0,
+    "a80": 0.44,
+    "rest": 0.37,
+    "p9010": 14.882,
+    "cv": 0.965,
+    "mls": 5.898,
+    "kurt": 18.629,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.1,0.25,0.6,0.75",
+   "loo_same_category": {
+    "emd_L": 9.99,
+    "emd_C": 9.51,
+    "palette_dE": 11.84,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "end_02_soshigaya_22_end.jpg": {
+   "full": {
+    "L": 97.607,
+    "clip": 0.156,
+    "crush": 0.005,
+    "span": 95.881,
+    "ratio": 0.416,
+    "pale": 0.001,
+    "hic": 0.0,
+    "a80": 0.456,
+    "rest": 0.275,
+    "p9010": 23.741,
+    "cv": 0.954,
+    "mls": 7.658,
+    "kurt": 12.435,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 64.418,
+    "clip": 0.034,
+    "crush": 0.005,
+    "span": 95.14,
+    "ratio": 0.339,
+    "pale": 0.0,
+    "hic": 0.0,
+    "a80": 0.426,
+    "rest": 0.362,
+    "p9010": 8.939,
+    "cv": 1.17,
+    "mls": 2.279,
+    "kurt": 22.77,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.15,0.25,0.88,0.68",
+   "loo_same_category": {
+    "emd_L": 8.88,
+    "emd_C": 8.54,
+    "palette_dE": 13.42,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "end_03_nagasawa_2-2_end.jpg": {
+   "full": {
+    "L": 85.959,
+    "clip": 0.003,
+    "crush": 0.012,
+    "span": 93.363,
+    "ratio": 0.294,
+    "pale": 0.002,
+    "hic": 0.006,
+    "a80": 0.405,
+    "rest": 0.394,
+    "p9010": 31.741,
+    "cv": 0.863,
+    "mls": 6.821,
+    "kurt": 13.877,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 80.115,
+    "clip": 0.0,
+    "crush": 0.004,
+    "span": 87.589,
+    "ratio": 0.292,
+    "pale": 0.0,
+    "hic": 0.0,
+    "a80": 0.37,
+    "rest": 0.406,
+    "p9010": 16.081,
+    "cv": 1.292,
+    "mls": 2.433,
+    "kurt": 68.388,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.05,0.25,0.62,0.8",
+   "loo_same_category": {
+    "emd_L": 11.88,
+    "emd_C": 7.7,
+    "palette_dE": 13.88,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "end_04_naruko_end_a.jpg": {
+   "full": {
+    "L": null,
+    "clip": 0.341,
+    "crush": 0.007,
+    "span": 93.039,
+    "ratio": 0.0,
+    "pale": 0.027,
+    "hic": 0.081,
+    "a80": 0.411,
+    "rest": 0.36,
+    "p9010": null,
+    "cv": null,
+    "mls": null,
+    "kurt": null,
+    "vr": "warn",
+    "sb": "warn",
+    "dd": "pass",
+    "mu": "na",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 56.669,
+    "clip": 0.061,
+    "crush": 0.001,
+    "span": 80.657,
+    "ratio": 0.492,
+    "pale": 0.007,
+    "hic": 0.007,
+    "a80": 0.434,
+    "rest": 0.333,
+    "p9010": 44.629,
+    "cv": 1.104,
+    "mls": 3.952,
+    "kurt": 19.182,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.2,0.15,0.74,0.78",
+   "loo_same_category": {
+    "emd_L": 8.29,
+    "emd_C": 11.35,
+    "palette_dE": 17.15,
+    "reference_match": "fail",
+    "palette_raw": "warn"
+   }
+  },
+  "end_05_naruko_end_b.jpg": {
+   "full": {
+    "L": 82.582,
+    "clip": 0.003,
+    "crush": 0.023,
+    "span": 84.391,
+    "ratio": 0.25,
+    "pale": 0.001,
+    "hic": 0.109,
+    "a80": 0.339,
+    "rest": 0.475,
+    "p9010": 5.704,
+    "cv": 1.382,
+    "mls": 1.522,
+    "kurt": 10.272,
+    "vr": "warn",
+    "sb": "fail",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 82.558,
+    "clip": 0.002,
+    "crush": 0.01,
+    "span": 85.251,
+    "ratio": 0.25,
+    "pale": 0.001,
+    "hic": 0.019,
+    "a80": 0.381,
+    "rest": 0.432,
+    "p9010": 3.71,
+    "cv": 1.202,
+    "mls": 1.144,
+    "kurt": 7.563,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.2,0.15,0.75,0.8",
+   "loo_same_category": {
+    "emd_L": 19.13,
+    "emd_C": 19.81,
+    "palette_dE": 23.18,
+    "reference_match": "fail",
+    "palette_raw": "warn"
+   }
+  },
+  "end_06_kita_ward_end.jpg": {
+   "full": {
+    "L": 66.837,
+    "clip": 0.003,
+    "crush": 0.008,
+    "span": 90.61,
+    "ratio": 0.295,
+    "pale": 0.034,
+    "hic": 0.001,
+    "a80": 0.464,
+    "rest": 0.339,
+    "p9010": 5.663,
+    "cv": 0.547,
+    "mls": 9.682,
+    "kurt": 8.394,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 67.227,
+    "clip": 0.002,
+    "crush": 0.011,
+    "span": 88.643,
+    "ratio": 0.296,
+    "pale": 0.008,
+    "hic": 0.001,
+    "a80": 0.465,
+    "rest": 0.342,
+    "p9010": 23.375,
+    "cv": 1.21,
+    "mls": 3.423,
+    "kurt": 55.29,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.08,0.12,0.82,0.75",
+   "loo_same_category": {
+    "emd_L": 8.88,
+    "emd_C": 7.74,
+    "palette_dE": 12.62,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "estate_01_chiryu_estate.jpg": {
+   "full": {
+    "L": 83.048,
+    "clip": 0.004,
+    "crush": 0.001,
+    "span": 78.698,
+    "ratio": 0.636,
+    "pale": 0.005,
+    "hic": 0.004,
+    "a80": 0.369,
+    "rest": 0.418,
+    "p9010": 6.074,
+    "cv": 0.626,
+    "mls": 9.785,
+    "kurt": 7.968,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 83.207,
+    "clip": 0.002,
+    "crush": 0.0,
+    "span": 78.008,
+    "ratio": 1.037,
+    "pale": 0.008,
+    "hic": 0.005,
+    "a80": 0.404,
+    "rest": 0.413,
+    "p9010": 22.811,
+    "cv": 1.964,
+    "mls": 1.585,
+    "kurt": 74.049,
+    "vr": "pass",
+    "sb": "warn",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.25,0.2,1,0.68",
+   "loo_same_category": {
+    "emd_L": 8.79,
+    "emd_C": 6.11,
+    "palette_dE": 13.36,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "estate_02_fukuhama_estate.jpg": {
+   "full": {
+    "L": 90.93,
+    "clip": 0.052,
+    "crush": 0.012,
+    "span": 95.268,
+    "ratio": 0.355,
+    "pale": 0.018,
+    "hic": 0.002,
+    "a80": 0.346,
+    "rest": 0.49,
+    "p9010": 5.05,
+    "cv": 0.465,
+    "mls": 17.024,
+    "kurt": 5.435,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 91.736,
+    "clip": 0.153,
+    "crush": 0.031,
+    "span": 99.062,
+    "ratio": 0.591,
+    "pale": 0.055,
+    "hic": 0.001,
+    "a80": 0.7,
+    "rest": 0.05,
+    "p9010": 3.306,
+    "cv": 0.353,
+    "mls": 19.48,
+    "kurt": 5.689,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "info",
+    "mu_raw": "warn"
+   },
+   "wall_crop": "0.07,0.27,0.92,0.6",
+   "loo_same_category": {
+    "emd_L": 8.12,
+    "emd_C": 6.98,
+    "palette_dE": 11.99,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "estate_03_nakaajima_estate.jpg": {
+   "full": {
+    "L": 80.001,
+    "clip": 0.026,
+    "crush": 0.008,
+    "span": 93.326,
+    "ratio": 0.684,
+    "pale": 0.0,
+    "hic": 0.002,
+    "a80": 0.342,
+    "rest": 0.472,
+    "p9010": 3.598,
+    "cv": 0.402,
+    "mls": 21.748,
+    "kurt": 3.517,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "info",
+    "mu_raw": "fail"
+   },
+   "wall": {
+    "L": 83.228,
+    "clip": 0.043,
+    "crush": 0.005,
+    "span": 95.909,
+    "ratio": 0.178,
+    "pale": 0.0,
+    "hic": 0.004,
+    "a80": 0.277,
+    "rest": 0.58,
+    "p9010": 17.045,
+    "cv": 0.459,
+    "mls": 19.393,
+    "kurt": 4.309,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.15,0.25,0.95,0.6",
+   "loo_same_category": {
+    "emd_L": 10.15,
+    "emd_C": 6.88,
+    "palette_dE": 14.67,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "estate_04_nishikasuga_estate.jpg": {
+   "full": {
+    "L": 86.506,
+    "clip": 0.053,
+    "crush": 0.004,
+    "span": 96.491,
+    "ratio": 0.503,
+    "pale": 0.014,
+    "hic": 0.156,
+    "a80": 0.421,
+    "rest": 0.314,
+    "p9010": 2.286,
+    "cv": 1.634,
+    "mls": 1.005,
+    "kurt": 19.266,
+    "vr": "pass",
+    "sb": "fail",
+    "dd": "pass",
+    "mu": "info",
+    "mu_raw": "warn"
+   },
+   "wall": {
+    "L": 79.095,
+    "clip": 0.0,
+    "crush": 0.014,
+    "span": 88.52,
+    "ratio": 0.507,
+    "pale": 0.007,
+    "hic": 0.006,
+    "a80": 0.719,
+    "rest": 0.016,
+    "p9010": 17.392,
+    "cv": 0.642,
+    "mls": 7.156,
+    "kurt": 7.103,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.47,1,0.58",
+   "loo_same_category": {
+    "emd_L": 11.34,
+    "emd_C": 7.43,
+    "palette_dE": 17.62,
+    "reference_match": "warn",
+    "palette_raw": "warn"
+   }
+  },
+  "estate_05_todaso_estate.jpg": {
+   "full": {
+    "L": 68.111,
+    "clip": 0.088,
+    "crush": 0.006,
+    "span": 87.899,
+    "ratio": 0.409,
+    "pale": 0.02,
+    "hic": 0.001,
+    "a80": 0.388,
+    "rest": 0.368,
+    "p9010": 37.695,
+    "cv": 1.13,
+    "mls": 4.069,
+    "kurt": 20.312,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 67.516,
+    "clip": 0.002,
+    "crush": 0.013,
+    "span": 86.25,
+    "ratio": 0.408,
+    "pale": 0.025,
+    "hic": 0.002,
+    "a80": 0.625,
+    "rest": 0.144,
+    "p9010": 35.883,
+    "cv": 1.07,
+    "mls": 4.575,
+    "kurt": 18.173,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.4,1,0.68",
+   "loo_same_category": {
+    "emd_L": 12.62,
+    "emd_C": 9.28,
+    "palette_dE": 15.96,
+    "reference_match": "warn",
+    "palette_raw": "warn"
+   }
+  },
+  "estate_06_inazawa_estate.jpg": {
+   "full": {
+    "L": 46.971,
+    "clip": 0.0,
+    "crush": 0.0,
+    "span": 81.636,
+    "ratio": 0.449,
+    "pale": 0.012,
+    "hic": 0.02,
+    "a80": 0.268,
+    "rest": 0.56,
+    "p9010": 2.586,
+    "cv": 0.372,
+    "mls": 9.304,
+    "kurt": 5.275,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "info",
+    "mu_raw": "warn"
+   },
+   "wall": {
+    "L": 81.588,
+    "clip": 0.001,
+    "crush": 0.001,
+    "span": 86.927,
+    "ratio": 0.271,
+    "pale": 0.08,
+    "hic": 0.0,
+    "a80": 0.656,
+    "rest": 0.104,
+    "p9010": 5.609,
+    "cv": 0.472,
+    "mls": 9.299,
+    "kurt": 7.143,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.57,1,0.72",
+   "loo_same_category": {
+    "emd_L": 12.2,
+    "emd_C": 12.67,
+    "palette_dE": 15.48,
+    "reference_match": "fail",
+    "palette_raw": "warn"
+   }
+  },
+  "facade_01_akabanedai_facade.jpg": {
+   "full": {
+    "L": 62.676,
+    "clip": 0.008,
+    "crush": 0.012,
+    "span": 92.545,
+    "ratio": 0.369,
+    "pale": 0.049,
+    "hic": 0.0,
+    "a80": 0.374,
+    "rest": 0.409,
+    "p9010": 11.626,
+    "cv": 0.701,
+    "mls": 7.705,
+    "kurt": 12.069,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 62.818,
+    "clip": 0.003,
+    "crush": 0.005,
+    "span": 90.227,
+    "ratio": 0.326,
+    "pale": 0.034,
+    "hic": 0.0,
+    "a80": 0.493,
+    "rest": 0.254,
+    "p9010": 11.688,
+    "cv": 0.893,
+    "mls": 5.646,
+    "kurt": 18.301,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.1,0.25,0.6,0.7",
+   "loo_same_category": {
+    "emd_L": 10.21,
+    "emd_C": 7.72,
+    "palette_dE": 12.95,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "facade_02_todaso_facade.jpg": {
+   "full": {
+    "L": 58.948,
+    "clip": 0.06,
+    "crush": 0.005,
+    "span": 89.988,
+    "ratio": 0.119,
+    "pale": 0.179,
+    "hic": 0.0,
+    "a80": 0.533,
+    "rest": 0.207,
+    "p9010": 17.994,
+    "cv": 0.806,
+    "mls": 7.263,
+    "kurt": 10.438,
+    "vr": "warn",
+    "sb": "warn",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 63.106,
+    "clip": 0.036,
+    "crush": 0.003,
+    "span": 88.589,
+    "ratio": 0.127,
+    "pale": 0.067,
+    "hic": 0.0,
+    "a80": 0.543,
+    "rest": 0.195,
+    "p9010": 15.988,
+    "cv": 0.801,
+    "mls": 4.883,
+    "kurt": 19.211,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.2,0.2,0.75,0.75",
+   "loo_same_category": {
+    "emd_L": 7.9,
+    "emd_C": 6.43,
+    "palette_dE": 10.76,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "facade_03_kurume_nishi_facade.jpg": {
+   "full": {
+    "L": 67.623,
+    "clip": 0.017,
+    "crush": 0.011,
+    "span": 91.863,
+    "ratio": 0.19,
+    "pale": 0.007,
+    "hic": 0.014,
+    "a80": 0.391,
+    "rest": 0.427,
+    "p9010": 2.594,
+    "cv": 0.354,
+    "mls": 14.489,
+    "kurt": 3.788,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "info",
+    "mu_raw": "fail"
+   },
+   "wall": {
+    "L": 85.926,
+    "clip": 0.054,
+    "crush": 0.009,
+    "span": 94.956,
+    "ratio": 0.29,
+    "pale": 0.023,
+    "hic": 0.003,
+    "a80": 0.599,
+    "rest": 0.188,
+    "p9010": 2.439,
+    "cv": 0.326,
+    "mls": 16.078,
+    "kurt": 3.505,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "info",
+    "mu_raw": "fail"
+   },
+   "wall_crop": "0,0.33,0.95,0.6",
+   "loo_same_category": {
+    "emd_L": 9.87,
+    "emd_C": 10.46,
+    "palette_dE": 14.6,
+    "reference_match": "fail",
+    "palette_raw": "pass"
+   }
+  },
+  "facade_04_musashioka_facade.jpg": {
+   "full": {
+    "L": null,
+    "clip": 0.007,
+    "crush": 0.01,
+    "span": 95.096,
+    "ratio": 0.0,
+    "pale": 0.046,
+    "hic": 0.001,
+    "a80": 0.497,
+    "rest": 0.234,
+    "p9010": null,
+    "cv": null,
+    "mls": null,
+    "kurt": null,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "na",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": null,
+    "clip": 0.021,
+    "crush": 0.0,
+    "span": 87.764,
+    "ratio": 0.0,
+    "pale": 0.102,
+    "hic": 0.001,
+    "a80": 0.632,
+    "rest": 0.097,
+    "p9010": null,
+    "cv": null,
+    "mls": null,
+    "kurt": null,
+    "vr": "pass",
+    "sb": "warn",
+    "dd": "fail",
+    "mu": "na",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.05,0.2,0.7,0.68",
+   "loo_same_category": {
+    "emd_L": 8.82,
+    "emd_C": 6.47,
+    "palette_dE": 10.8,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "facade_05_soshigaya_29_30_facade.jpg": {
+   "full": {
+    "L": 84.515,
+    "clip": 0.01,
+    "crush": 0.022,
+    "span": 90.422,
+    "ratio": 0.432,
+    "pale": 0.015,
+    "hic": 0.002,
+    "a80": 0.379,
+    "rest": 0.408,
+    "p9010": 70.376,
+    "cv": 0.671,
+    "mls": 13.092,
+    "kurt": 6.878,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 87.789,
+    "clip": 0.035,
+    "crush": 0.028,
+    "span": 96.481,
+    "ratio": 0.811,
+    "pale": 0.06,
+    "hic": 0.004,
+    "a80": 0.585,
+    "rest": 0.134,
+    "p9010": 3.488,
+    "cv": 0.427,
+    "mls": 15.979,
+    "kurt": 5.643,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.15,0.35,0.95,0.6",
+   "loo_same_category": {
+    "emd_L": 8.61,
+    "emd_C": 7.49,
+    "palette_dE": 10.19,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "facade_06_nakatai_facade.jpg": {
+   "full": {
+    "L": 80.451,
+    "clip": 0.016,
+    "crush": 0.005,
+    "span": 92.434,
+    "ratio": 0.474,
+    "pale": 0.007,
+    "hic": 0.013,
+    "a80": 0.493,
+    "rest": 0.284,
+    "p9010": 4.692,
+    "cv": 0.674,
+    "mls": 9.475,
+    "kurt": 9.585,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 80.354,
+    "clip": 0.022,
+    "crush": 0.005,
+    "span": 90.288,
+    "ratio": 0.401,
+    "pale": 0.005,
+    "hic": 0.003,
+    "a80": 0.602,
+    "rest": 0.19,
+    "p9010": 15.482,
+    "cv": 0.752,
+    "mls": 10.082,
+    "kurt": 9.54,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.1,0.95,0.55",
+   "loo_same_category": {
+    "emd_L": 10.49,
+    "emd_C": 6.79,
+    "palette_dE": 11.88,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "facade_07_blue_white_green_slab.jpg": {
+   "full": {
+    "L": 95.345,
+    "clip": 0.144,
+    "crush": 0.024,
+    "span": 98.968,
+    "ratio": 0.355,
+    "pale": 0.016,
+    "hic": 0.263,
+    "a80": 0.429,
+    "rest": 0.394,
+    "p9010": 8.035,
+    "cv": 0.609,
+    "mls": 10.793,
+    "kurt": 9.752,
+    "vr": "warn",
+    "sb": "fail",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 97.01,
+    "clip": 0.288,
+    "crush": 0.006,
+    "span": 97.766,
+    "ratio": 0.538,
+    "pale": 0.031,
+    "hic": 0.017,
+    "a80": 0.55,
+    "rest": 0.21,
+    "p9010": 24.415,
+    "cv": 0.682,
+    "mls": 9.179,
+    "kurt": 11.262,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.15,0.65,0.7",
+   "loo_same_category": {
+    "emd_L": 10.56,
+    "emd_C": 21.09,
+    "palette_dE": 20.71,
+    "reference_match": "fail",
+    "palette_raw": "warn"
+   }
+  },
+  "street_01_chiryu_street.jpg": {
+   "full": {
+    "L": 60.667,
+    "clip": 0.011,
+    "crush": 0.0,
+    "span": 89.913,
+    "ratio": 0.426,
+    "pale": 0.002,
+    "hic": 0.005,
+    "a80": 0.53,
+    "rest": 0.219,
+    "p9010": 7.753,
+    "cv": 0.621,
+    "mls": 6.802,
+    "kurt": 9.745,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 96.916,
+    "clip": 0.047,
+    "crush": 0.0,
+    "span": 92.258,
+    "ratio": 0.578,
+    "pale": 0.013,
+    "hic": 0.007,
+    "a80": 0.499,
+    "rest": 0.228,
+    "p9010": 8.903,
+    "cv": 0.689,
+    "mls": 6.872,
+    "kurt": 10.361,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.15,0.3,0.6",
+   "loo_same_category": {
+    "emd_L": 12.98,
+    "emd_C": 7.23,
+    "palette_dE": 12.88,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "street_02_kanasugidai_street.jpg": {
+   "full": {
+    "L": 54.459,
+    "clip": 0.116,
+    "crush": 0.001,
+    "span": 86.03,
+    "ratio": 0.636,
+    "pale": 0.164,
+    "hic": 0.002,
+    "a80": 0.428,
+    "rest": 0.361,
+    "p9010": 4.109,
+    "cv": 0.491,
+    "mls": 10.859,
+    "kurt": 6.464,
+    "vr": "warn",
+    "sb": "warn",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 84.369,
+    "clip": 0.018,
+    "crush": 0.002,
+    "span": 90.223,
+    "ratio": 0.998,
+    "pale": 0.082,
+    "hic": 0.0,
+    "a80": 0.589,
+    "rest": 0.136,
+    "p9010": 7.612,
+    "cv": 0.56,
+    "mls": 9.572,
+    "kurt": 7.948,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.7,0.4,1,0.65",
+   "loo_same_category": {
+    "emd_L": 14.59,
+    "emd_C": 5.33,
+    "palette_dE": 11.53,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "street_03_naka_ajima_street.jpg": {
+   "full": {
+    "L": 100.0,
+    "clip": 0.269,
+    "crush": 0.001,
+    "span": 92.314,
+    "ratio": 0.442,
+    "pale": 0.001,
+    "hic": 0.001,
+    "a80": 0.447,
+    "rest": 0.311,
+    "p9010": 6.622,
+    "cv": 0.603,
+    "mls": 5.433,
+    "kurt": 10.203,
+    "vr": "fail",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 62.055,
+    "clip": 0.079,
+    "crush": 0.001,
+    "span": 90.767,
+    "ratio": 0.195,
+    "pale": 0.0,
+    "hic": 0.0,
+    "a80": 0.484,
+    "rest": 0.234,
+    "p9010": 13.291,
+    "cv": 0.808,
+    "mls": 4.692,
+    "kurt": 18.839,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.15,0.6,0.62",
+   "loo_same_category": {
+    "emd_L": 11.44,
+    "emd_C": 5.47,
+    "palette_dE": 8.98,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "street_04_soshigaya_22_street.jpg": {
+   "full": {
+    "L": 99.781,
+    "clip": 0.129,
+    "crush": 0.002,
+    "span": 91.982,
+    "ratio": 0.678,
+    "pale": 0.023,
+    "hic": 0.0,
+    "a80": 0.512,
+    "rest": 0.253,
+    "p9010": 9.506,
+    "cv": 0.866,
+    "mls": 6.994,
+    "kurt": 14.735,
+    "vr": "fail",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 83.027,
+    "clip": 0.063,
+    "crush": 0.004,
+    "span": 95.993,
+    "ratio": 0.189,
+    "pale": 0.021,
+    "hic": 0.0,
+    "a80": 0.591,
+    "rest": 0.123,
+    "p9010": 17.299,
+    "cv": 0.804,
+    "mls": 9.282,
+    "kurt": 11.82,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.05,0.2,0.95,0.7",
+   "loo_same_category": {
+    "emd_L": 10.87,
+    "emd_C": 3.36,
+    "palette_dE": 8.88,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "street_05_sukematsu_street.jpg": {
+   "full": {
+    "L": 42.539,
+    "clip": 0.281,
+    "crush": 0.007,
+    "span": 98.379,
+    "ratio": 0.272,
+    "pale": 0.018,
+    "hic": 0.0,
+    "a80": 0.422,
+    "rest": 0.335,
+    "p9010": 3.261,
+    "cv": 0.443,
+    "mls": 4.692,
+    "kurt": 7.481,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 59.898,
+    "clip": 0.008,
+    "crush": 0.005,
+    "span": 79.736,
+    "ratio": 0.304,
+    "pale": 0.001,
+    "hic": 0.0,
+    "a80": 0.578,
+    "rest": 0.109,
+    "p9010": 4.319,
+    "cv": 0.558,
+    "mls": 4.609,
+    "kurt": 10.598,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.45,0.2,1,0.48",
+   "loo_same_category": {
+    "emd_L": 11.56,
+    "emd_C": 3.25,
+    "palette_dE": 10.15,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "street_06_todaso_street.jpg": {
+   "full": {
+    "L": 55.901,
+    "clip": 0.168,
+    "crush": 0.009,
+    "span": 93.111,
+    "ratio": 0.213,
+    "pale": 0.164,
+    "hic": 0.006,
+    "a80": 0.573,
+    "rest": 0.15,
+    "p9010": 5.881,
+    "cv": 0.551,
+    "mls": 10.113,
+    "kurt": 8.291,
+    "vr": "warn",
+    "sb": "warn",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 59.379,
+    "clip": 0.015,
+    "crush": 0.009,
+    "span": 92.005,
+    "ratio": 0.134,
+    "pale": 0.013,
+    "hic": 0.0,
+    "a80": 0.62,
+    "rest": 0.094,
+    "p9010": 4.912,
+    "cv": 0.533,
+    "mls": 9.975,
+    "kurt": 8.662,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.62,0.15,1,0.6",
+   "loo_same_category": {
+    "emd_L": 13.68,
+    "emd_C": 3.15,
+    "palette_dE": 9.26,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "street_07_kuwabukuro_street.jpg": {
+   "full": {
+    "L": 44.844,
+    "clip": 0.029,
+    "crush": 0.046,
+    "span": 92.347,
+    "ratio": 0.12,
+    "pale": 0.022,
+    "hic": 0.0,
+    "a80": 0.482,
+    "rest": 0.236,
+    "p9010": 9.788,
+    "cv": 0.624,
+    "mls": 13.921,
+    "kurt": 6.267,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": null,
+    "clip": 0.056,
+    "crush": 0.038,
+    "span": 98.616,
+    "ratio": 0.0,
+    "pale": 0.075,
+    "hic": 0.0,
+    "a80": 0.372,
+    "rest": 0.432,
+    "p9010": null,
+    "cv": null,
+    "mls": null,
+    "kurt": null,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "na",
+    "mu_raw": ""
+   },
+   "wall_crop": "0.7,0.35,1,0.7",
+   "loo_same_category": {
+    "emd_L": 10.52,
+    "emd_C": 3.38,
+    "palette_dE": 10.04,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_01_ogikubo_stained_facade.jpg": {
+   "full": {
+    "L": 100.0,
+    "clip": 0.135,
+    "crush": 0.001,
+    "span": 96.864,
+    "ratio": 0.397,
+    "pale": 0.001,
+    "hic": 0.004,
+    "a80": 0.617,
+    "rest": 0.085,
+    "p9010": 2.864,
+    "cv": 0.466,
+    "mls": 3.361,
+    "kurt": 5.385,
+    "vr": "fail",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "info",
+    "mu_raw": "warn"
+   },
+   "wall": {
+    "L": 66.736,
+    "clip": 0.002,
+    "crush": 0.0,
+    "span": 76.118,
+    "ratio": 0.379,
+    "pale": 0.0,
+    "hic": 0.0,
+    "a80": 0.674,
+    "rest": 0.018,
+    "p9010": 2.756,
+    "cv": 0.437,
+    "mls": 3.415,
+    "kurt": 5.341,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "info",
+    "mu_raw": "warn"
+   },
+   "wall_crop": "0,0.15,0.85,0.85",
+   "loo_same_category": {
+    "emd_L": 9.86,
+    "emd_C": 2.57,
+    "palette_dE": 9.43,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_02_saginomiya_stained_end.jpg": {
+   "full": {
+    "L": 99.389,
+    "clip": 0.238,
+    "crush": 0.006,
+    "span": 97.903,
+    "ratio": 0.403,
+    "pale": 0.001,
+    "hic": 0.021,
+    "a80": 0.473,
+    "rest": 0.301,
+    "p9010": 13.891,
+    "cv": 0.94,
+    "mls": 5.916,
+    "kurt": 14.503,
+    "vr": "fail",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 73.448,
+    "clip": 0.185,
+    "crush": 0.001,
+    "span": 91.87,
+    "ratio": 0.427,
+    "pale": 0.002,
+    "hic": 0.001,
+    "a80": 0.438,
+    "rest": 0.339,
+    "p9010": 11.754,
+    "cv": 1.036,
+    "mls": 4.569,
+    "kurt": 20.565,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0.15,0.95,0.7",
+   "loo_same_category": {
+    "emd_L": 11.43,
+    "emd_C": 2.34,
+    "palette_dE": 10.57,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_03_tsukida_entrance.jpg": {
+   "full": {
+    "L": 84.46,
+    "clip": 0.0,
+    "crush": 0.0,
+    "span": 78.835,
+    "ratio": 0.781,
+    "pale": 0.038,
+    "hic": 0.0,
+    "a80": 0.551,
+    "rest": 0.163,
+    "p9010": 5.253,
+    "cv": 0.737,
+    "mls": 1.625,
+    "kurt": 11.974,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 84.46,
+    "clip": 0.0,
+    "crush": 0.0,
+    "span": 78.835,
+    "ratio": 0.781,
+    "pale": 0.038,
+    "hic": 0.0,
+    "a80": 0.551,
+    "rest": 0.163,
+    "p9010": 5.253,
+    "cv": 0.737,
+    "mls": 1.625,
+    "kurt": 11.974,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,1,1",
+   "loo_same_category": {
+    "emd_L": 10.47,
+    "emd_C": 2.64,
+    "palette_dE": 11.72,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_04_rust_streaks_concrete.jpg": {
+   "full": {
+    "L": 66.862,
+    "clip": 0.011,
+    "crush": 0.004,
+    "span": 75.406,
+    "ratio": 0.581,
+    "pale": 0.0,
+    "hic": 0.006,
+    "a80": 0.729,
+    "rest": 0.0,
+    "p9010": 1.536,
+    "cv": 0.17,
+    "mls": 18.004,
+    "kurt": 3.044,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "info",
+    "mu_raw": "fail"
+   },
+   "wall": {
+    "L": 66.862,
+    "clip": 0.011,
+    "crush": 0.004,
+    "span": 75.406,
+    "ratio": 0.581,
+    "pale": 0.0,
+    "hic": 0.006,
+    "a80": 0.729,
+    "rest": 0.0,
+    "p9010": 1.536,
+    "cv": 0.17,
+    "mls": 18.004,
+    "kurt": 3.044,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "fail",
+    "mu": "info",
+    "mu_raw": "fail"
+   },
+   "wall_crop": "0,0,1,1",
+   "loo_same_category": {
+    "emd_L": 11.11,
+    "emd_C": 2.39,
+    "palette_dE": 11.77,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_05_rust_streaks_window.jpg": {
+   "full": {
+    "L": null,
+    "clip": 0.002,
+    "crush": 0.001,
+    "span": 81.783,
+    "ratio": 0.0,
+    "pale": 0.0,
+    "hic": 0.001,
+    "a80": 0.354,
+    "rest": 0.387,
+    "p9010": null,
+    "cv": null,
+    "mls": null,
+    "kurt": null,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "na",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 59.217,
+    "clip": 0.0,
+    "crush": 0.0,
+    "span": 78.515,
+    "ratio": 1.084,
+    "pale": 0.0,
+    "hic": 0.001,
+    "a80": 0.537,
+    "rest": 0.116,
+    "p9010": 1.637,
+    "cv": 0.194,
+    "mls": 4.496,
+    "kurt": 3.652,
+    "vr": "warn",
+    "sb": "warn",
+    "dd": "warn",
+    "mu": "info",
+    "mu_raw": "fail"
+   },
+   "wall_crop": "0,0.45,1,1",
+   "loo_same_category": {
+    "emd_L": 17.91,
+    "emd_C": 2.44,
+    "palette_dE": 13.09,
+    "reference_match": "fail",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_06_soshigaya_28_stairs.jpg": {
+   "full": {
+    "L": 77.243,
+    "clip": 0.049,
+    "crush": 0.011,
+    "span": 95.769,
+    "ratio": 0.42,
+    "pale": 0.047,
+    "hic": 0.0,
+    "a80": 0.562,
+    "rest": 0.143,
+    "p9010": 10.632,
+    "cv": 0.834,
+    "mls": 7.617,
+    "kurt": 15.396,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": 77.243,
+    "clip": 0.049,
+    "crush": 0.011,
+    "span": 95.769,
+    "ratio": 0.42,
+    "pale": 0.047,
+    "hic": 0.0,
+    "a80": 0.562,
+    "rest": 0.143,
+    "p9010": 10.632,
+    "cv": 0.834,
+    "mls": 7.617,
+    "kurt": 15.396,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,1,1",
+   "loo_same_category": {
+    "emd_L": 9.72,
+    "emd_C": 2.71,
+    "palette_dE": 10.86,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  },
+  "weathering_07_saginomiya_wall_close.jpg": {
+   "full": {
+    "L": 51.658,
+    "clip": 0.155,
+    "crush": 0.007,
+    "span": 97.79,
+    "ratio": 0.202,
+    "pale": 0.025,
+    "hic": 0.0,
+    "a80": 0.439,
+    "rest": 0.314,
+    "p9010": 6.011,
+    "cv": 0.649,
+    "mls": 5.292,
+    "kurt": 12.744,
+    "vr": "warn",
+    "sb": "pass",
+    "dd": "pass",
+    "mu": "pass",
+    "mu_raw": ""
+   },
+   "wall": {
+    "L": null,
+    "clip": 0.003,
+    "crush": 0.004,
+    "span": 55.079,
+    "ratio": 0.0,
+    "pale": 0.0,
+    "hic": 0.0,
+    "a80": 0.456,
+    "rest": 0.304,
+    "p9010": null,
+    "cv": null,
+    "mls": null,
+    "kurt": null,
+    "vr": "pass",
+    "sb": "pass",
+    "dd": "warn",
+    "mu": "na",
+    "mu_raw": ""
+   },
+   "wall_crop": "0,0,0.55,1",
+   "loo_same_category": {
+    "emd_L": 14.87,
+    "emd_C": 3.55,
+    "palette_dE": 10.78,
+    "reference_match": "warn",
+    "palette_raw": "pass"
+   }
+  }
+ },
+ "pairs": [
+  {
+   "pair": "bay-1",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 15.75,
+    "emd_C": 5.75,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 10.76
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 7.89,
+    "emd_C": 6.87,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.3
+   },
+   "winner": "v2/03_golden_bay_lit",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "bay-2",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 7.89,
+    "emd_C": 6.87,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.3
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 20.98,
+    "emd_C": 5.6,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.96
+   },
+   "winner": "v2/03_golden_bay_lit",
+   "choice": "left",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "bay-3",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 17.23,
+    "emd_C": 5.89,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.38
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 7.89,
+    "emd_C": 6.87,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.3
+   },
+   "winner": "v2/03_golden_bay_lit",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "bay-4",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 15.75,
+    "emd_C": 5.75,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 10.76
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 20.98,
+    "emd_C": 5.6,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.96
+   },
+   "winner": "v3/03_golden_bay_9m",
+   "choice": "left",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "bay-5",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 17.23,
+    "emd_C": 5.89,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.38
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 15.75,
+    "emd_C": 5.75,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 10.76
+   },
+   "winner": "v3/03_golden_bay_9m",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "bay-6",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 20.98,
+    "emd_C": 5.6,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.96
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 17.23,
+    "emd_C": 5.89,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.38
+   },
+   "winner": "v5/04_golden_bay_street_distance",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "close-1",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 10.16,
+    "emd_C": 5.24,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.66
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 11.34,
+    "emd_C": 4.86,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.52
+   },
+   "winner": "v2/02_golden_piece_closeup",
+   "choice": "left",
+   "ref_categories": [
+    "bay",
+    "weathering"
+   ],
+   "n_refs": 13
+  },
+  {
+   "pair": "close-2",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 10.16,
+    "emd_C": 5.24,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.66
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 10.44,
+    "emd_C": 4.01,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 9.89
+   },
+   "winner": "v3/02_golden_piece_closeup",
+   "choice": "right",
+   "ref_categories": [
+    "bay",
+    "weathering"
+   ],
+   "n_refs": 13
+  },
+  {
+   "pair": "close-3",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 15.97,
+    "emd_C": 5.76,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 12.91
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 10.44,
+    "emd_C": 4.01,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 9.89
+   },
+   "winner": "v3/02_golden_piece_closeup",
+   "choice": "right",
+   "ref_categories": [
+    "bay",
+    "weathering"
+   ],
+   "n_refs": 13
+  },
+  {
+   "pair": "close-4",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 10.16,
+    "emd_C": 5.24,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.66
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 15.97,
+    "emd_C": 5.76,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 12.91
+   },
+   "winner": "v2/02_golden_piece_closeup",
+   "choice": "left",
+   "ref_categories": [
+    "bay",
+    "weathering"
+   ],
+   "n_refs": 13
+  },
+  {
+   "pair": "corr-1",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 16.11,
+    "emd_C": 6.9,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.3
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 22.96,
+    "emd_C": 6.56,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 16.18
+   },
+   "winner": "v2/13_corridor_closeup",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "corr-2",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 16.11,
+    "emd_C": 6.9,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.3
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 22.63,
+    "emd_C": 5.98,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 15.11
+   },
+   "winner": "v5/06_corridor_side_core",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "corr-3",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 22.63,
+    "emd_C": 5.98,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 15.11
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 22.96,
+    "emd_C": 6.56,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 16.18
+   },
+   "winner": "v2/13_corridor_closeup",
+   "choice": "right",
+   "ref_categories": [
+    "bay"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "end-1",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 25.59,
+    "emd_C": 10.49,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 16.87
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 17.13,
+    "emd_C": 7.23,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 15.99
+   },
+   "winner": "v4/05_gable_number",
+   "choice": "left",
+   "ref_categories": [
+    "end"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "facade-1",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 11.1,
+    "emd_C": 7.89,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 12.12
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 11.25,
+    "emd_C": 7.26,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 12.5
+   },
+   "winner": "v2/05_facade_across_street",
+   "choice": "right",
+   "ref_categories": [
+    "facade"
+   ],
+   "n_refs": 7
+  },
+  {
+   "pair": "seeds-1",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 13.24,
+    "emd_C": 13.2,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 15.01
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 11.27,
+    "emd_C": 8.99,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 16.06
+   },
+   "winner": "v2/08_variation_9_seeds_se",
+   "choice": "right",
+   "ref_categories": [
+    "estate"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "seeds-2",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 13.24,
+    "emd_C": 13.2,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 15.01
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 26.03,
+    "emd_C": 13.54,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 17.94
+   },
+   "winner": "v5/09_variation_9up",
+   "choice": "right",
+   "ref_categories": [
+    "estate"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "seeds-3",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 26.03,
+    "emd_C": 13.54,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 17.94
+   },
+   "right": {
+    "reference_match": "warn",
+    "emd_L": 11.27,
+    "emd_C": 8.99,
+    "palette": "info",
+    "palette_raw": "warn",
+    "palette_dE": 16.06
+   },
+   "winner": null,
+   "choice": "same",
+   "ref_categories": [
+    "estate"
+   ],
+   "n_refs": 6
+  },
+  {
+   "pair": "street-1",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 9.88,
+    "emd_C": 3.53,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 10.0
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 18.1,
+    "emd_C": 6.23,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 12.22
+   },
+   "winner": "v3/10_hero_street",
+   "choice": "left",
+   "ref_categories": [
+    "street"
+   ],
+   "n_refs": 7
+  },
+  {
+   "pair": "street-2",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 18.07,
+    "emd_C": 5.3,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.48
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 18.1,
+    "emd_C": 6.23,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 12.22
+   },
+   "winner": "v5/05_street_view_balcony_side",
+   "choice": "left",
+   "ref_categories": [
+    "street"
+   ],
+   "n_refs": 7
+  },
+  {
+   "pair": "street-3",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 9.88,
+    "emd_C": 3.53,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 10.0
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 18.07,
+    "emd_C": 5.3,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.48
+   },
+   "winner": "v3/10_hero_street",
+   "choice": "left",
+   "ref_categories": [
+    "street"
+   ],
+   "n_refs": 7
+  },
+  {
+   "pair": "street-4",
+   "left": {
+    "reference_match": "fail",
+    "emd_L": 18.07,
+    "emd_C": 5.3,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.48
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 15.75,
+    "emd_C": 6.99,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.85
+   },
+   "winner": "v5/05_street_view_balcony_side",
+   "choice": "left",
+   "ref_categories": [
+    "street"
+   ],
+   "n_refs": 7
+  },
+  {
+   "pair": "street-5",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 13.51,
+    "emd_C": 2.94,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.24
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 18.07,
+    "emd_C": 5.3,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 13.48
+   },
+   "winner": "v5/05_street_view_balcony_side",
+   "choice": "right",
+   "ref_categories": [
+    "street"
+   ],
+   "n_refs": 7
+  },
+  {
+   "pair": "street-6",
+   "left": {
+    "reference_match": "warn",
+    "emd_L": 9.88,
+    "emd_C": 3.53,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 10.0
+   },
+   "right": {
+    "reference_match": "fail",
+    "emd_L": 15.75,
+    "emd_C": 6.99,
+    "palette": "pass",
+    "palette_raw": "pass",
+    "palette_dE": 11.85
+   },
+   "winner": "v3/10_hero_street",
+   "choice": "left",
+   "ref_categories": [
+    "street"
+   ],
+   "n_refs": 7
+  }
+ ]
+}

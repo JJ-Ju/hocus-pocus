@@ -10,7 +10,39 @@ networks) and used in MaterialX materials rendered by Karma or exported to an en
 node and parameter name here was checked in Houdini 22.0.466. The graphs in `scripts/` cook
 headless and write correct files.
 
+**Read before authoring:**
+- [references/realism.md](references/realism.md) for variation, weathering physics and
+  clustering;
+- [references/weather-and-use.md](references/weather-and-use.md) for where water, wind, sun,
+  people and industry act;
+- [references/micro-noise.md](references/micro-noise.md) for non-uniform grain, with patterns
+  by surface;
+- [references/layering.md](references/layering.md) for height blending, the stack order,
+  normal blending, packing, and what to bake versus layer in the shader;
+- [references/concrete.md](references/concrete.md) for concrete, bare or under a coat: the
+  finish per element, the formwork module, the layer stack, recipes and the engine path;
+- [references/paint-rust-concrete.md](references/paint-rust-concrete.md) for the close-up:
+  paint that fails as a stack (older coat first, concrete last, by ISO 4628-5 amounts and where
+  water stays), rust on painted steel in rings (old core, fresh margin, exposed metal, blisters)
+  with runs down the uprights, concrete voids, aggregate shadows and flecks by number, the coat's
+  chroma drift, masks from the geometry (corners, recesses, top edges), and what reads at each
+  distance;
+- [references/weathering-rules.md](references/weathering-rules.md) for weathering by number:
+  opacity tiers, scale levels, coverage by age and upkeep, growth by wetness class, mark colour
+  families, rust by grade that follows the water along the members (feet and joints first, runs
+  down the uprights, stains on the concrete below), cracks, spalls and edges, and the gate in
+  `scripts/weathering/`
+  that a weathered building passes before anyone reviews it.
+
+This file only summarises them. Only when the brief asks for a painted or anime-background look,
+also read [references/stylisation-anime.md](references/stylisation-anime.md): an optional
+profile switched on over the realistic material, with a Copernicus post in
+`scripts/build_anime_post.py`.
+
 Companion skills:
+- **`large-scale-texturing`:** for a whole building or estate: tiling sets without repetition,
+  trims, decals and low-res masks revealed against the tiling detail, budgets and the
+  engine-mirror preview. A facade's weathering never lives in one unique low-res sheet.
 - **`procedural-assets`:** where materials sit in a kit or generator, and trims versus tiling
   per piece.
 - **`procedural-mesh-damage`:** geometric chips and breaks that the material must answer,
@@ -72,7 +104,7 @@ Copernicus works in linear; the sRGB numbers are what land in a PNG.
 
 | Material | Base colour | Roughness | Metallic |
 |---|---|---|---|
-| Fresh concrete | ~0.51 linear (~189 sRGB); aged darker | 0.75–0.95 | 0 |
+| Fresh concrete | ~0.51 linear (~189 sRGB); aged darker | formed skin 0.55–0.7; weathered 0.75–0.85; sand streaks and abrasion 0.85–0.95 | 0 |
 | Asphalt | 0.02 fresh to 0.08 worn linear | 0.85–0.95; polished aggregate 0.6–0.75 | 0 |
 | Iron, steel | (0.56, 0.57, 0.58) linear | 0.3–0.6 bare | 1 |
 | Painted metal | the paint colour | gloss 0.3–0.55, matte 0.6–0.8 | 0 |
@@ -109,7 +141,8 @@ values are Unreal's measured figures.
    (mode stretch).
 4. **Derived maps.**
    - **Normal:** `heighttonormal` with `scale` = relief depth (m) ÷ (tile width (m) ÷ 2),
-     usually exaggerated 1.5–3×. A scale of 8 on a 2 m tile is far too strong.
+     × 1.0–1.5 at most. No calibrated numbers exist, and critiques name normals that are too
+     strong, not too weak. A scale of 8 on a 2 m tile is far too strong.
    - **AO:** `heighttoambientocclusion` (`heightscale`, `viewradius`).
    - **Curvature:** `curvature`. Check its range with a `statistics` COP and stretch it to 0–1
      (`equalize`) before writing 8-bit.
@@ -122,7 +155,8 @@ values are Unreal's measured figures.
    - Composites: `blend` with a mask.
 6. **Story layer.**
    - Downward streaks: `streakblur` and `distort` with **`dirtype` = coord and `dir` = (0, −1)**
-     (the default angle mode ignores `dir`).
+     (the default angle mode ignores `dir`). `streakblur` also needs **`bias` 1**: at the
+     default 0 it smears up as well as down.
    - Grunge set: `grunge_leakingstreaks`, `grunge_drips`, `grunge_rust`,
      `grunge_rustysurface`, `grunge_moisture`, `grunge_moldspots`, `grunge_wipetrails`.
    - Slope blur (eroded edges): `slopedir` into `distort`'s `dir` input (`streak` min).
@@ -144,6 +178,60 @@ values are Unreal's measured figures.
    grayscale (`mono`), downsampled (`resample`), a Karma render on a plane and a sphere
    (`previewmaterial`, `geotype` sphere or shaderball), then on the asset.
 
+## What makes it read as real
+
+The test renders that looked most CG had one albedo value, one roughness and one texture
+across the whole facade, with only the streaks placed. Fixes, in order of effect (numbers in
+[references/realism.md](references/realism.md)):
+
+1. **Weather by the physics of water.** Rain first cleans, then soils. The top floors get the
+   most rain: open faces there wash paler, and the streaks under top-floor and parapet
+   features are the longest and strongest. Lower floors carry more sheltered grime. Inside
+   corners collect water and dirt. Streams recur at the same spots: the ends of sills,
+   window-base corners, where horizontal meets vertical, below fixtures (longer under bigger
+   projections). An old wall shows both dark streaks and pale washed ones, plus a jagged
+   rain-shadow dirt line, and a damp splash band at the base. Vary every streak's spacing,
+   length, width, intensity and colour, and build large stains from layered opacities
+   ("Streak variety" in [references/weather-and-use.md](references/weather-and-use.md)).
+2. **Cluster, with a background.** About 80 % of each notable layer sits on 15–25 % of the
+   area, at a cluster scale at least as large as the frame. Every layer keeps 10–20 % of its
+   strength elsewhere. This holds at the micro scale as much as the macro (item 10). Multiply cause × large clusters × medium × small, then threshold. Check
+   it with statistics on the local contrast (references/realism.md): on ordinary photographed
+   walls about half the wall is 5 % or more darker than its cleanest patch nearby, a tenth 10 %
+   or more, and a few per cent 18 % or more.
+3. **One cause field for every layer.** Damp, streak, roughness, algae, rust and peeling read
+   the same source.
+4. **Roughness from causes.** Damp is darker and smoother; dust on top faces is rougher;
+   hand contact is polished; a repaint patch differs mostly in sheen.
+5. **Albedo variation at three scales:** macro 5–30 m ±6–12 % value, meso per bay ±3–6 %,
+   micro ±2–4 %. Fade the sunny side. "Clean" is not flat: a fresh wall still has roller laps,
+   batch shifts and dust. Concrete is never one value either.
+6. **Dirt is a colour.** Lerp toward soot brown, green-black biofilm or rust orange, never a
+   grey multiply.
+7. **No visible repeat.** Hex-tile the tiling maps (`mtlxhextiledimage`,
+   `mtlxhextilednormalmap`, COP `hextile`), and add a per-bay tint from an id primvar. Detail a
+   mask is revealed against needs the histogram-preserving blend and equalised mips, and
+   directional detail (rivulets, roller laps) is offset per band, never rotated (see
+   `large-scale-texturing/references/tiling-and-blending.md`).
+8. **Edges first, streaks from sources.** Weather and wear concentrate at arrises and corners.
+   Every streak starts at a feature: a sill end, the low point of a top edge, a top with no
+   drip, a fixing, the lower lip of a chip. It is full strength at the source, widens and
+   fades. Painted steel fails where water sits: rail tops, junctions, post bases, door
+   bottoms. Worn and chipped edges read **lighter** than the face around them: the break
+   exposes clean concrete or primer, while the face carries soot and grime. That is how
+   environment concept art reads edges. Light catching an edge comes from the shader and the
+   bevel, never baked into the albedo. See
+   [references/weather-and-use.md](references/weather-and-use.md).
+9. **Touch and traffic.** Touch points sit at code heights and wear as bands and strips (a
+   door's latch edge, a rail's top, one or two lift buttons). Floors wear in lanes from the
+   entrances. One or two hot points take most of each layer.
+10. **The micro scale clusters too.** Fine grain is Gaussian noise times an amplitude field
+    from the causes. It is denser at the top of each pour, sharper at fresh breaks, and
+    flattened and dirt-filled where worn. Use clustered scatter with power-law sizes for
+    discrete features, and check the 90th/10th percentile spread of local contrast (photographed walls run
+    3–30, median 12.5; under 2 fails). See [references/micro-noise.md](references/micro-noise.md) for the per-surface
+    catalogue.
+
 ## Story on tiling kits: in the shader
 
 A tiling texture repeats wherever the kit repeats, so wear placed by the building itself
@@ -158,6 +246,9 @@ tiling maps and put the story in the shader:
   through `smooth`) keeps whole stretches clean. Without it every ledge streaks the same,
   which is the uniform-detail failure.
 - Link each layer's amount to an HDA parm, so weathering is a control and not baked in.
+- Read the generator's cause points too. Damage hotspots (`damage_hot`, `damage_halo` from
+  the `procedural-mesh-damage` cluster mask) and facade stories (a leak, a neglected flat) as
+  primvars let edge wear, grime, streaks and rust sit where the chips and the cause are.
 
 For a unique piece that is unwrapped (not tiling), the same masks can be rasterised into
 UV space instead (`rasterizesetup` `space` uv, then `rasterizegeo`), which an engine needs
@@ -193,15 +284,25 @@ Details, the Substance-to-Copernicus node map and per-material recipes are in
 - **RGB data written sRGB.** `rop_image` encodes RGB layers to sRGB by default. Set
   `colorconversion` raw for normals and packed masks.
 - **8-bit height bands.** Use `size1` int16 for height and normal.
-- **Streak and distort direction ignored** unless `dirtype` is coord.
+- **Streak and distort direction ignored** unless `dirtype` is coord; `streakblur` is
+  centred (both ways) unless `bias` is 1.
+- **`fractalnoise` stretch and spread.** `elementscale` does nothing unless
+  `elementsizetype` is 1 (Per-Component Controls). The noise around 0.5 has a std of only
+  about 0.076 (p1–p99 0.31–0.70), so a factor written as if it filled 0–1 gives about a
+  quarter of the intended variation. Scale by the measured spread, or `equalize` first, and
+  measure the result per band.
+- **RGBA data masks.** `rop_image`'s default PNG alpha mode (token premult) divides RGB by
+  A; write data with the token unpremult (label "Raw"). Karma's `mtlximage` multiplies RGB
+  by A when it reads an RGBA PNG, so keep data masks RGB or one per file.
 - **Grunge masks saturate at their defaults.** `grunge_rust` and its kin cover large areas
   at the default coverage: rust blotches on every door. Threshold them sparse and check
   coverage with `statistics`: a painted steel door wants a few per cent of rust, not a
   third.
 - **SOP `Cd` in MaterialX** arrives as the primvar `displayColor`; `geompropvalue "Cd"`
   reads black in Karma.
-- **Tile-pattern shapes stretch with the cell.** Circles in non-square cells become ellipses;
-  compensate with `hscale`/`vscale`.
+- **Tile-pattern circles stay round** in non-square cells at the default `useaspectratio` 0,
+  sized to the smaller side; `useaspectratio` 1 stretches them. Outside a shape the `id` is
+  invalid, and `randommono` gives all those pixels one shared value unless `zeroinvalid` is 1.
 - **Multi-output nodes:** wire by output index or name (`tilepattern` `id` is output 1;
   `shapescatter` `result`). `hextile` takes the texture in its `textotile` input, not input 0.
 - **First cooks are slow** because they include OpenCL compilation (grunge nodes up to about

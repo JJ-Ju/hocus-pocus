@@ -1,0 +1,332 @@
+[
+ {
+  "pair": "p01",
+  "cam": "hero",
+  "variable": "task 1 brush-stroke layer off / on",
+  "A": "p01_hero_A_base.jpg",
+  "B": "p01_hero_B_t1.jpg",
+  "sizes": [
+   198287,
+   199762
+  ]
+ },
+ {
+  "pair": "p01",
+  "cam": "facade",
+  "variable": "task 1 brush-stroke layer off / on",
+  "A": "p01_facade_A_base.jpg",
+  "B": "p01_facade_B_t1.jpg",
+  "sizes": [
+   257318,
+   260320
+  ]
+ },
+ {
+  "pair": "p02",
+  "cam": "hero",
+  "variable": "task 1 stroke amplitude x1 / x2 (value 3->6 %, hue 4->8 deg, sat 5->10 %)",
+  "A": "p02_hero_A_t1.jpg",
+  "B": "p02_hero_B_t1_x2.jpg",
+  "sizes": [
+   199762,
+   202375
+  ]
+ },
+ {
+  "pair": "p02",
+  "cam": "facade",
+  "variable": "task 1 stroke amplitude x1 / x2 (value 3->6 %, hue 4->8 deg, sat 5->10 %)",
+  "A": "p02_facade_A_t1.jpg",
+  "B": "p02_facade_B_t1_x2.jpg",
+  "sizes": [
+   260320,
+   264577
+  ]
+ },
+ {
+  "pair": "p03",
+  "cam": "hero",
+  "variable": "task 1 brush layer off / on, both under the round-C post (dusk, strength 0.4, haze 0.70)",
+  "A": "p03_hero_A_base_post.jpg",
+  "B": "p03_hero_B_t1_post.jpg",
+  "sizes": [
+   199026,
+   200532
+  ]
+ },
+ {
+  "pair": "p03",
+  "cam": "facade",
+  "variable": "task 1 brush layer off / on, both under the round-C post (dusk, strength 0.4, haze 0.70)",
+  "A": "p03_facade_A_base_post.jpg",
+  "B": "p03_facade_B_t1_post.jpg",
+  "sizes": [
+   247028,
+   249420
+  ]
+ },
+ {
+  "pair": "p04",
+  "cam": "hero",
+  "variable": "round-C post off / on (dusk, strength 0.4, haze 0.70) over task 1 - post is offline only",
+  "A": "p04_hero_A_t1.jpg",
+  "B": "p04_hero_B_t1_post.jpg",
+  "sizes": [
+   199762,
+   200532
+  ]
+ },
+ {
+  "pair": "p04",
+  "cam": "facade",
+  "variable": "round-C post off / on (dusk, strength 0.4, haze 0.70) over task 1 - post is offline only",
+  "A": "p04_facade_A_t1.jpg",
+  "B": "p04_facade_B_t1_post.jpg",
+  "sizes": [
+   260320,
+   249420
+  ]
+ },
+ {
+  "pair": "p05",
+  "cam": "hero",
+  "variable": "light colours: neutral / warm key + cold blue fill (engine-native 'dusk' pick), task 1",
+  "A": "p05_hero_A_t1.jpg",
+  "B": "p05_hero_B_t1_keyfill.jpg",
+  "sizes": [
+   199762,
+   201159
+  ]
+ },
+ {
+  "pair": "p05",
+  "cam": "facade",
+  "variable": "light colours: neutral / warm key + cold blue fill (engine-native 'dusk' pick), task 1",
+  "A": "p05_facade_A_t1.jpg",
+  "B": "p05_facade_B_t1_keyfill.jpg",
+  "sizes": [
+   260320,
+   261016
+  ]
+ },
+ {
+  "pair": "p06",
+  "cam": "hero",
+  "variable": "task 2 hyper-real painterly layer off / on",
+  "A": "p06_hero_A_base.jpg",
+  "B": "p06_hero_B_t2.jpg",
+  "sizes": [
+   198287,
+   199376
+  ]
+ },
+ {
+  "pair": "p06",
+  "cam": "facade",
+  "variable": "task 2 hyper-real painterly layer off / on",
+  "A": "p06_facade_A_base.jpg",
+  "B": "p06_facade_B_t2.jpg",
+  "sizes": [
+   257318,
+   257149
+  ]
+ },
+ {
+  "pair": "p07",
+  "cam": "hero",
+  "variable": "task 2 hue-drift field (blue<->green, warm zones, sun warmth) off / on",
+  "A": "p07_hero_A_t2_nodrift.jpg",
+  "B": "p07_hero_B_t2.jpg",
+  "sizes": [
+   198241,
+   199376
+  ]
+ },
+ {
+  "pair": "p07",
+  "cam": "facade",
+  "variable": "task 2 hue-drift field (blue<->green, warm zones, sun warmth) off / on",
+  "A": "p07_facade_A_t2_nodrift.jpg",
+  "B": "p07_facade_B_t2.jpg",
+  "sizes": [
+   256776,
+   257149
+  ]
+ },
+ {
+  "pair": "p08",
+  "cam": "hero",
+  "variable": "task 2 lifted saturated darks (emission) off / on",
+  "A": "p08_hero_A_t2_nolift.jpg",
+  "B": "p08_hero_B_t2.jpg",
+  "sizes": [
+   201837,
+   199376
+  ]
+ },
+ {
+  "pair": "p08",
+  "cam": "facade",
+  "variable": "task 2 lifted saturated darks (emission) off / on",
+  "A": "p08_facade_A_t2_nolift.jpg",
+  "B": "p08_facade_B_t2.jpg",
+  "sizes": [
+   261084,
+   257149
+  ]
+ },
+ {
+  "pair": "p09",
+  "cam": "hero",
+  "variable": "task 2 high-frequency multi-hue detail off / on",
+  "A": "p09_hero_A_t2_nodetail.jpg",
+  "B": "p09_hero_B_t2.jpg",
+  "sizes": [
+   196906,
+   199376
+  ]
+ },
+ {
+  "pair": "p09",
+  "cam": "facade",
+  "variable": "task 2 high-frequency multi-hue detail off / on",
+  "A": "p09_facade_A_t2_nodetail.jpg",
+  "B": "p09_facade_B_t2.jpg",
+  "sizes": [
+   254208,
+   257149
+  ]
+ },
+ {
+  "pair": "p10",
+  "cam": "hero",
+  "variable": "task 2 amplitudes default / strong (lift 0.04->0.07, detail x1.7, drift x1.5)",
+  "A": "p10_hero_A_t2.jpg",
+  "B": "p10_hero_B_t2_strong.jpg",
+  "sizes": [
+   199376,
+   201716
+  ]
+ },
+ {
+  "pair": "p10",
+  "cam": "facade",
+  "variable": "task 2 amplitudes default / strong (lift 0.04->0.07, detail x1.7, drift x1.5)",
+  "A": "p10_facade_A_t2.jpg",
+  "B": "p10_facade_B_t2_strong.jpg",
+  "sizes": [
+   257149,
+   260160
+  ]
+ },
+ {
+  "pair": "p11",
+  "cam": "hero",
+  "variable": "light colours: neutral / warm key + cold blue fill, task 2",
+  "A": "p11_hero_A_t2.jpg",
+  "B": "p11_hero_B_t2_keyfill.jpg",
+  "sizes": [
+   199376,
+   199613
+  ]
+ },
+ {
+  "pair": "p11",
+  "cam": "facade",
+  "variable": "light colours: neutral / warm key + cold blue fill, task 2",
+  "A": "p11_facade_A_t2.jpg",
+  "B": "p11_facade_B_t2_keyfill.jpg",
+  "sizes": [
+   257149,
+   257332
+  ]
+ },
+ {
+  "pair": "p12",
+  "cam": "hero",
+  "variable": "style: task 1 anime brush layer / task 2 hyper-real painterly",
+  "A": "p12_hero_A_t1.jpg",
+  "B": "p12_hero_B_t2.jpg",
+  "sizes": [
+   199762,
+   199376
+  ]
+ },
+ {
+  "pair": "p12",
+  "cam": "facade",
+  "variable": "style: task 1 anime brush layer / task 2 hyper-real painterly",
+  "A": "p12_facade_A_t1.jpg",
+  "B": "p12_facade_B_t2.jpg",
+  "sizes": [
+   260320,
+   257149
+  ]
+ },
+ {
+  "pair": "p13",
+  "cam": "piece",
+  "variable": "golden piece: procedural MaterialX / baked plain textures re-imported (task 2)",
+  "A": "p13_piece_A_piece_t2_procedural.jpg",
+  "B": "p13_piece_B_piece_t2_plain.jpg",
+  "sizes": [
+   74319,
+   59884
+  ]
+ },
+ {
+  "pair": "p14",
+  "cam": "piece",
+  "variable": "golden piece: procedural MaterialX / baked plain textures re-imported (task 1)",
+  "A": "p14_piece_A_piece_t1_procedural.jpg",
+  "B": "p14_piece_B_piece_t1_plain.jpg",
+  "sizes": [
+   65560,
+   39992
+  ]
+ },
+ {
+  "pair": "p01z",
+  "cam": "hero",
+  "variable": "2x crop of p01 (near parapets): brush layer off / on",
+  "A": "p01z_hero_A_base.jpg",
+  "B": "p01z_hero_B_t1.jpg",
+  "sizes": [
+   36173,
+   36602
+  ]
+ },
+ {
+  "pair": "p02z",
+  "cam": "hero",
+  "variable": "2x crop of p02: amplitude x1 / x2",
+  "A": "p02z_hero_A_t1.jpg",
+  "B": "p02z_hero_B_t1_x2.jpg",
+  "sizes": [
+   36602,
+   36904
+  ]
+ },
+ {
+  "pair": "p06z",
+  "cam": "facade",
+  "variable": "2x crop of p06: task 2 off / on",
+  "A": "p06z_facade_A_base.jpg",
+  "B": "p06z_facade_B_t2.jpg",
+  "sizes": [
+   52777,
+   52848
+  ]
+ },
+ {
+  "pair": "p09z",
+  "cam": "facade",
+  "variable": "2x crop of p09: detail off / on",
+  "A": "p09z_facade_A_t2_nodetail.jpg",
+  "B": "p09z_facade_B_t2.jpg",
+  "sizes": [
+   52178,
+   52848
+  ]
+ }
+]
